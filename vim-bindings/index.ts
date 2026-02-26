@@ -30,6 +30,7 @@
  * - Shift+Alt+I: go to start of line (insert mode shortcut)
  * - Alt+o: open new line below (insert mode shortcut)
  * - Alt+Shift+o: open new line above (insert mode shortcut)
+ * - u: undo (normal mode, sends ctrl+_ to underlying readline editor)
  * - ctrl+c, ctrl+d, etc. work in both modes
  *
  * Inspired by original repo:
@@ -70,6 +71,7 @@ import {
   CTRL_A,
   CTRL_E,
   CTRL_K,
+  CTRL_UNDERSCORE,
   NEWLINE,
 } from "./types.js";
 import {
@@ -78,11 +80,24 @@ import {
   findWordMotionTarget,
 } from "./motions.js";
 
-class ModalEditor extends CustomEditor {
+export class ModalEditor extends CustomEditor {
   private mode: Mode = "insert";
   private pendingMotion: PendingMotion = null;
   private pendingOperator: PendingOperator = null;
   private lastCharMotion: LastCharMotion | null = null;
+
+  // Unnamed register (task 3)
+  private unnamedRegister: string = "";
+  private clipboardFn: (text: string) => void = (text: string) => {
+    try { copyToClipboard(text); } catch { /* best effort */ }
+  };
+
+  // Test seams
+  setClipboardFn(fn: (text: string) => void): void { this.clipboardFn = fn; }
+  getRegister(): string { return this.unnamedRegister; }
+  setRegister(text: string): void { this.unnamedRegister = text; }
+  getMode(): Mode { return this.mode; }
+  getText(): string { return this.getLines().join("\n"); }
 
   handleInput(data: string): void {
     if (matchesKey(data, "escape")) {
@@ -115,7 +130,6 @@ class ModalEditor extends CustomEditor {
       return super.handleInput(data);
     }
 
-
     if (this.pendingMotion) {
       return this.handlePendingMotion(data);
     }
@@ -126,6 +140,10 @@ class ModalEditor extends CustomEditor {
 
     if (this.pendingOperator === "c") {
       return this.handlePendingChange(data);
+    }
+
+    if (this.pendingOperator === "y") {
+      return this.handlePendingYank(data);
     }
 
     this.handleNormalMode(data);
@@ -153,6 +171,9 @@ class ModalEditor extends CustomEditor {
         this.deleteWithCharMotion(this.pendingMotion!, data);
         this.pendingOperator = null;
         this.mode = "insert";
+      } else if (this.pendingOperator === "y") {
+        this.yankWithCharMotion(this.pendingMotion!, data);
+        this.pendingOperator = null;
       } else {
         this.executeCharMotion(this.pendingMotion!, data);
       }
@@ -172,7 +193,11 @@ class ModalEditor extends CustomEditor {
     }
     if (this.deleteWithMotion(data)) {
       this.pendingOperator = null;
+      return;
     }
+
+    // Invalid motion: cancel operator to avoid sticky surprising deletes.
+    this.pendingOperator = null;
   }
 
   private handlePendingChange(data: string): void {
@@ -189,7 +214,11 @@ class ModalEditor extends CustomEditor {
     if (this.deleteWithMotion(data)) {
       this.pendingOperator = null;
       this.mode = "insert";
+      return;
     }
+
+    // Invalid motion: cancel operator to avoid sticky surprising changes.
+    this.pendingOperator = null;
   }
 
   private handleNormalMode(data: string): void {
@@ -200,6 +229,21 @@ class ModalEditor extends CustomEditor {
 
     if (data === "c") {
       this.pendingOperator = "c";
+      return;
+    }
+
+    if (data === "y") {
+      this.pendingOperator = "y";
+      return;
+    }
+
+    if (data === "p") {
+      this.putAfter();
+      return;
+    }
+
+    if (data === "P") {
+      this.putBefore();
       return;
     }
 
@@ -218,6 +262,11 @@ class ModalEditor extends CustomEditor {
         this.lastCharMotion.char,
         false,
       );
+      return;
+    }
+
+    if (data === "u") {
+      super.handleInput(CTRL_UNDERSCORE); // ctrl+_ — readline undo
       return;
     }
 
@@ -316,13 +365,10 @@ class ModalEditor extends CustomEditor {
     }
   }
 
-  private copyTextToSystemClipboard(text: string): void {
+  private writeToRegister(text: string): void {
+    this.unnamedRegister = text;
     if (!text) return;
-    try {
-      copyToClipboard(text);
-    } catch {
-      // Best effort only.
-    }
+    this.clipboardFn(text);
   }
 
   private getCurrentLineAndCol(): { line: string; col: number } {
@@ -333,20 +379,35 @@ class ModalEditor extends CustomEditor {
 
   private cutCharUnderCursor(): void {
     const { line, col } = this.getCurrentLineAndCol();
+    if (line.length === 0) return; // Don't merge empty lines with x
+    if (col >= line.length) return; // Don't delete past end of line
+
     const deleted = line.slice(col, col + 1);
-    this.copyTextToSystemClipboard(deleted);
+    this.writeToRegister(deleted);
     super.handleInput(ESC_DELETE);
   }
 
   private cutToEndOfLine(): void {
+    const lines = this.getLines();
+    const cursorLine = this.getCursor().line;
     const { line, col } = this.getCurrentLineAndCol();
-    this.copyTextToSystemClipboard(line.slice(col));
+
+    const hasNextLine = cursorLine < lines.length - 1;
+    const deleted = col < line.length ? line.slice(col) : hasNextLine ? "\n" : "";
+
+    this.writeToRegister(deleted);
     super.handleInput(CTRL_K);
   }
 
   private cutCurrentLineContent(): void {
+    const lines = this.getLines();
+    const cursorLine = this.getCursor().line;
     const { line } = this.getCurrentLineAndCol();
-    this.copyTextToSystemClipboard(line);
+
+    const hasNextLine = cursorLine < lines.length - 1;
+    const deleted = line.length > 0 ? line : hasNextLine ? "\n" : "";
+
+    this.writeToRegister(deleted);
     super.handleInput(CTRL_A);
     super.handleInput(CTRL_K);
   }
@@ -374,8 +435,9 @@ class ModalEditor extends CustomEditor {
         targetCol = findWordMotionTarget(line, col, "backward", "start");
         break;
       case "$":
-        targetCol = line.length;
-        break;
+        // Match D/C behavior exactly, including newline kill at EOL.
+        this.cutToEndOfLine();
+        return true;
       case "0":
         targetCol = 0;
         break;
@@ -390,18 +452,7 @@ class ModalEditor extends CustomEditor {
   private deleteWithCharMotion(motion: CharMotion, targetChar: string): void {
     const line = this.getLines()[this.getCursor().line] ?? "";
     const col = this.getCursor().col;
-    const isForward = motion === "f" || motion === "t";
-    const isTill = motion === "t" || motion === "T";
-
-    let targetCol: number | null = null;
-
-    if (isForward) {
-      const idx = line.indexOf(targetChar, col + 1);
-      if (idx !== -1) targetCol = isTill ? idx - 1 : idx;
-    } else {
-      const idx = line.lastIndexOf(targetChar, col - 1);
-      if (idx !== -1) targetCol = isTill ? idx + 1 : idx;
-    }
+    const targetCol = findCharMotionTarget(line, col, motion, targetChar);
 
     if (targetCol === null) return;
 
@@ -409,26 +460,139 @@ class ModalEditor extends CustomEditor {
     this.deleteRange(col, targetCol, true); // char motions are inclusive
   }
 
+  private handlePendingYank(data: string): void {
+    if (data === "y") {
+      // yy — yank whole line (linewise)
+      const line = this.getLines()[this.getCursor().line] ?? "";
+      this.writeToRegister(line + "\n");
+      this.pendingOperator = null;
+      return;
+    }
+    if (CHAR_MOTION_KEYS.has(data)) {
+      this.pendingMotion = data as PendingMotion;
+      return;
+    }
+    if (this.yankWithMotion(data)) {
+      this.pendingOperator = null;
+    } else {
+      this.pendingOperator = null; // cancel on unrecognised motion
+    }
+  }
+
+  private yankWithMotion(motion: string): boolean {
+    const line = this.getLines()[this.getCursor().line] ?? "";
+    const col = this.getCursor().col;
+    let targetCol: number = 0;
+    let inclusive = false;
+
+    switch (motion) {
+      case "w":
+        targetCol = findWordMotionTarget(line, col, "forward", "start");
+        break;
+      case "e":
+        targetCol = findWordMotionTarget(line, col, "forward", "end");
+        inclusive = true;
+        break;
+      case "b":
+        targetCol = findWordMotionTarget(line, col, "backward", "start");
+        break;
+      case "$":
+        targetCol = line.length;
+        break;
+      case "0":
+        targetCol = 0;
+        break;
+      default:
+        return false;
+    }
+
+    this.yankRange(col, targetCol, inclusive);
+    return true;
+  }
+
+  private yankWithCharMotion(motion: CharMotion, targetChar: string): void {
+    const line = this.getLines()[this.getCursor().line] ?? "";
+    const col = this.getCursor().col;
+    const targetCol = findCharMotionTarget(line, col, motion, targetChar);
+
+    if (targetCol === null) return;
+
+    this.lastCharMotion = { motion, char: targetChar };
+    this.yankRange(col, targetCol, true); // char motions are inclusive
+  }
+
+  private yankRange(col: number, targetCol: number, inclusive: boolean): void {
+    const line = this.getLines()[this.getCursor().line] ?? "";
+    const start = Math.min(col, targetCol);
+    const rawEnd = Math.max(col, targetCol) + (inclusive ? 1 : 0);
+    const end = Math.min(rawEnd, line.length);
+
+    if (end <= start) return;
+
+    // Yank only — no cursor movement, no text mutation
+    this.writeToRegister(line.slice(start, end));
+  }
+
+  private putAfter(): void {
+    const text = this.unnamedRegister;
+    if (!text) return;
+
+    if (text.endsWith("\n")) {
+      // Line-wise: insert new line below and fill it
+      super.handleInput(CTRL_E);
+      super.handleInput(NEWLINE);
+      const content = text.slice(0, -1);
+      for (const char of content) {
+        super.handleInput(char === "\n" ? NEWLINE : char);
+      }
+    } else {
+      // Character-wise: insert after cursor
+      super.handleInput(ESC_RIGHT);
+      for (const char of text) {
+        super.handleInput(char === "\n" ? NEWLINE : char);
+      }
+    }
+  }
+
+  private putBefore(): void {
+    const text = this.unnamedRegister;
+    if (!text) return;
+
+    if (text.endsWith("\n")) {
+      // Line-wise: insert new line above and fill it
+      super.handleInput(CTRL_A);
+      super.handleInput(NEWLINE);
+      super.handleInput(ESC_UP);
+      const content = text.slice(0, -1);
+      for (const char of content) {
+        super.handleInput(char === "\n" ? NEWLINE : char);
+      }
+    } else {
+      // Character-wise: insert before cursor (just type it)
+      for (const char of text) {
+        super.handleInput(char === "\n" ? NEWLINE : char);
+      }
+    }
+  }
+
   private deleteRange(col: number, targetCol: number, inclusive: boolean): void {
     const line = this.getLines()[this.getCursor().line] ?? "";
 
-    if (targetCol > col) {
-      const end = targetCol + (inclusive ? 1 : 0);
-      this.copyTextToSystemClipboard(line.slice(col, end));
+    const start = Math.min(col, targetCol);
+    const rawEnd = Math.max(col, targetCol) + (inclusive ? 1 : 0);
+    const end = Math.min(rawEnd, line.length);
 
-      const count = targetCol - col + (inclusive ? 1 : 0);
-      for (let i = 0; i < count; i++) {
-        super.handleInput(ESC_DELETE);
-      }
-    } else if (targetCol < col) {
-      const end = col + (inclusive ? 1 : 0);
-      this.copyTextToSystemClipboard(line.slice(targetCol, end));
+    if (end <= start) return;
 
-      const count = col - targetCol + (inclusive ? 1 : 0);
-      this.moveCursorBy(targetCol - col);
-      for (let i = 0; i < count; i++) {
-        super.handleInput(ESC_DELETE);
-      }
+    this.writeToRegister(line.slice(start, end));
+
+    if (start !== col) {
+      this.moveCursorBy(start - col);
+    }
+
+    const count = end - start;
+    for (let i = 0; i < count; i++) {
+      super.handleInput(ESC_DELETE);
     }
   }
 
