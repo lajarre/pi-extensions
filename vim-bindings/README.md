@@ -88,9 +88,9 @@ All operators write to the unnamed register and mirror to the system clipboard
 
 | Command    | Deletes                                     |
 |------------|---------------------------------------------|
-| `dw`       | Forward to next word start (exclusive)      |
-| `de`       | Forward to word end (inclusive)             |
-| `db`       | Backward to word start (exclusive)          |
+| `dw`       | Forward to next word start (exclusive, can cross lines) |
+| `de`       | Forward to word end (inclusive, can cross lines)        |
+| `db`       | Backward to word start (exclusive, can cross lines)     |
 | `d$`       | To end of line                              |
 | `d0`       | To start of line                            |
 | `dd`       | Whole line content                          |
@@ -98,6 +98,8 @@ All operators write to the unnamed register and mirror to the system clipboard
 | `dt{char}` | Up to (not including) `char`                |
 | `dF{char}` | Backward to and including `char`            |
 | `dT{char}` | Backward to one after `char`                |
+| `diw`      | Inner word                                  |
+| `daw`      | Around word (includes surrounding spaces)   |
 
 #### Change `c{motion}` / `cc`
 
@@ -106,6 +108,8 @@ Same motion set as `d`. Deletes text then enters Insert mode.
 | Command | Alias |
 |---------|-------|
 | `cw`    | delete word + Insert |
+| `ciw`   | change inner word |
+| `caw`   | change around word |
 | `cc`    | delete line + Insert |
 | `c$`    | delete to EOL + Insert |
 | …       | all `d` motions apply |
@@ -135,6 +139,8 @@ Same motion set as `d`. Writes to register, **no text mutation**.
 | `y$`    | To end of line                  |
 | `y0`    | To start of line                |
 | `yf{c}` | To and including `char`         |
+| `yiw`   | Inner word                      |
+| `yaw`   | Around word (includes spaces)   |
 
 ---
 
@@ -175,19 +181,18 @@ Redo (`<C-r>`) is **not implemented** — see [Out of scope](#out-of-scope).
 | Area                  | This extension                         | Full Vim                      |
 |-----------------------|----------------------------------------|-------------------------------|
 | `$` motion            | Moves past last char (readline CTRL+E) | Moves to last char            |
-| `w` at EOL            | Stays at EOL                           | Wraps to next line            |
-| `e` at EOL            | Returns `line.length`                  | Wraps to next line            |
+| `w` / `e` / `b`       | Cross-line for word motions            | Cross-line                    |
 | `0` / `$` operators   | Exclusive of anchor col                | `0` inclusive of col 0        |
 | Undo depth            | Delegates to underlying readline undo  | Full per-change undo tree     |
 | Redo                  | Not implemented                        | `<C-r>`                       |
 | Visual mode           | Not implemented                        | `v`, `V`, `<C-v>`            |
-| Text objects          | Not implemented                        | `iw`, `aw`, `ip`, etc.        |
+| Text objects          | Supports `iw`/`aw` only               | Full text-object set           |
 | Count prefix          | Not implemented (e.g. `3dw`)           | Supported                     |
 | Named registers       | Not implemented (`"a`, etc.)           | Supported                     |
 | Macros                | Not implemented (`q`, `@`)             | Supported                     |
 | Search                | Not implemented (`/`, `?`, `n`, `N`)   | Supported                     |
 | Ex commands           | Not implemented (`:s`, `:g`, etc.)     | Supported                     |
-| Multi-line operators  | Operations stay on current line        | Cross-line operators          |
+| Multi-line operators  | `w/e/b`-based ops can cross lines; others line-local | Rich cross-line semantics |
 
 ---
 
@@ -196,7 +201,7 @@ Redo (`<C-r>`) is **not implemented** — see [Out of scope](#out-of-scope).
 These are **explicitly deferred** and not planned for this feature:
 
 - Visual modes (`v`, `V`, block visual)
-- Text objects (`iw`, `ip`, `i"`, etc.)
+- Extended text objects beyond word (`ip`, `i"`, `i(`, etc.)
 - Named registers (`"a`, `"b`, …)
 - Macros (`q{char}`, `@{char}`)
 - Ex command surface (`:s`, `:g`, `:r`, …)

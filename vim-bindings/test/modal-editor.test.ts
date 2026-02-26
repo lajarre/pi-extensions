@@ -175,6 +175,52 @@ describe("change operator — cw / ce / cb / c$ / c0 / cc", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Word text objects — iw / aw with d/c/y
+// ---------------------------------------------------------------------------
+
+describe("word text objects — iw / aw", () => {
+  it("ciw deletes inner word and enters insert mode", () => {
+    const { editor } = createEditorWithSpy("foo bar");
+    sendKeys(editor, ["c", "i", "w"]);
+    assert.equal(editor.getRegister(), "foo");
+    assert.equal(editor.getText(), " bar");
+    assert.equal(editor.getMode(), "insert");
+  });
+
+  it("caw deletes word plus trailing space and enters insert mode", () => {
+    const { editor } = createEditorWithSpy("foo bar");
+    sendKeys(editor, ["c", "a", "w"]);
+    assert.equal(editor.getRegister(), "foo ");
+    assert.equal(editor.getText(), "bar");
+    assert.equal(editor.getMode(), "insert");
+  });
+
+  it("diw deletes inner word", () => {
+    chk("foo bar", ["d", "i", "w"], " bar", "foo");
+  });
+
+  it("daw deletes word + trailing spaces", () => {
+    chk("foo bar", ["d", "a", "w"], "bar", "foo ");
+  });
+
+  it("yiw yanks inner word without mutation", () => {
+    const { editor } = createEditorWithSpy("foo bar");
+    const before = editor.getText();
+    sendKeys(editor, ["y", "i", "w"]);
+    assert.equal(editor.getRegister(), "foo");
+    assert.equal(editor.getText(), before);
+  });
+
+  it("yaw yanks word + trailing spaces without mutation", () => {
+    const { editor } = createEditorWithSpy("foo bar");
+    const before = editor.getText();
+    sendKeys(editor, ["y", "a", "w"]);
+    assert.equal(editor.getRegister(), "foo ");
+    assert.equal(editor.getText(), before);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Single-key edit commands — x / s / S / D / C
 // ---------------------------------------------------------------------------
 
@@ -280,6 +326,49 @@ describe("EOL and newline semantics", () => {
     sendKeys(editor, ["e", "x"]);
     assert.equal(editor.getRegister(), "1");
     assert.equal(editor.getText(), "line\nline2"); // only '1' gone, newline intact
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-line word motions (w / e / b and operator forms)
+// ---------------------------------------------------------------------------
+
+describe("cross-line word motions", () => {
+  it("w crosses EOL to next line word start", () => {
+    const { editor } = createMultiLineEditor("foo\nbar");
+    sendKeys(editor, ["$", "w", "x"]);
+    // After w from EOL of line 1, cursor lands on 'b' of next line.
+    assert.equal(editor.getText(), "foo\nar");
+    assert.equal(editor.getRegister(), "b");
+  });
+
+  it("b at BOL jumps to previous line word start", () => {
+    const { editor } = createMultiLineEditor("foo\nbar");
+    sendKeys(editor, ["j", "0", "b", "x"]);
+    assert.equal(editor.getText(), "oo\nbar");
+    assert.equal(editor.getRegister(), "f");
+  });
+
+  it("e crosses EOL to end of next line word", () => {
+    const { editor } = createMultiLineEditor("foo\nbar");
+    sendKeys(editor, ["$", "e", "x"]);
+    assert.equal(editor.getText(), "foo\nba");
+    assert.equal(editor.getRegister(), "r");
+  });
+
+  it("dw can delete across newline", () => {
+    const { editor } = createMultiLineEditor("foo\nbar");
+    sendKeys(editor, ["d", "w"]);
+    assert.equal(editor.getText(), "bar");
+    assert.equal(editor.getRegister(), "foo\n");
+  });
+
+  it("yw can yank across newline without mutation", () => {
+    const { editor } = createMultiLineEditor("foo\nbar");
+    const before = editor.getText();
+    sendKeys(editor, ["y", "w"]);
+    assert.equal(editor.getRegister(), "foo\n");
+    assert.equal(editor.getText(), before);
   });
 });
 
