@@ -8,12 +8,16 @@
   ],
   "scripts": {
     "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'"
+    "test": "node --import tsx/esm --test 'test/**/*.test.ts'",
+    "check": "npm run test"
   },
   "pi": {
     "extensions": [
       "./index.ts"
     ]
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",

@@ -4,8 +4,18 @@
 
 import type { CharMotion } from "./types.js";
 
-// Word character regex (alphanumeric + underscore)
-export const isWordChar = (c: string) => /\w/.test(c);
+// Character types for word boundary detection
+enum CharType {
+  Space = 0,
+  Keyword = 1, // alphanumeric + underscore
+  Other = 2, // punctuation/symbols
+}
+
+function getCharType(c: string | undefined): CharType {
+  if (!c || /\s/.test(c)) return CharType.Space;
+  if (/\w/.test(c)) return CharType.Keyword;
+  return CharType.Other;
+}
 
 /**
  * Reverse a character motion direction (f ↔ F, t ↔ T).
@@ -62,27 +72,54 @@ export function findWordMotionTarget(
   direction: "forward" | "backward",
   target: "start" | "end",
 ): number {
+  const len = line.length;
+  if (len === 0) return 0;
+
+  let i = Math.max(0, Math.min(col, len));
+
   if (direction === "forward") {
+    if (i >= len) return len;
+
     if (target === "start") {
       // w: move to start of next word
-      let i = col;
-      while (i < line.length && isWordChar(line[i]!)) i++;
-      while (i < line.length && !isWordChar(line[i]!)) i++;
-      return i;
-    } else {
-      // e: move to end of current/next word
-      let i = col;
-      if (i < line.length - 1) i++;
-      while (i < line.length && !isWordChar(line[i]!)) i++;
-      while (i < line.length - 1 && isWordChar(line[i + 1]!)) i++;
+      const startType = getCharType(line[i]);
+
+      // Skip current word/punct block
+      if (startType !== CharType.Space) {
+        while (i < len && getCharType(line[i]) === startType) i++;
+      }
+
+      // Skip whitespace
+      while (i < len && getCharType(line[i]) === CharType.Space) i++;
+
       return i;
     }
-  } else {
-    // b: move to start of previous word
-    let i = col;
-    if (i > 0) i--;
-    while (i > 0 && !isWordChar(line[i]!)) i--;
-    while (i > 0 && isWordChar(line[i - 1]!)) i--;
+
+    // e: move to end of current/next word
+    if (i < len - 1) i++;
+
+    // Skip whitespace forward
+    while (i < len && getCharType(line[i]) === CharType.Space) i++;
+
+    // Now at start of next word (or end of line). Find end.
+    if (i >= len) return len;
+
+    const type = getCharType(line[i]);
+    while (i < len - 1 && getCharType(line[i + 1]) === type) i++;
+
     return i;
   }
+
+  // b: move to start of previous word
+  if (i >= len) i = len - 1;
+  if (i > 0) i--;
+
+  // Skip whitespace backward
+  while (i > 0 && getCharType(line[i]) === CharType.Space) i--;
+
+  // Now at end of prev word (or start of line). Find start.
+  const type = getCharType(line[i]);
+  while (i > 0 && getCharType(line[i - 1]) === type) i--;
+
+  return i;
 }
