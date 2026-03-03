@@ -485,8 +485,22 @@ function detectDangerousCommand(command: string): { kind: "delete" | "piped shel
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
+    let disabled = false;
+
+    pi.registerCommand("no-protect", {
+        description: "Toggle protect-paths guards off/on for this session",
+        handler: async (_args, ctx) => {
+            disabled = !disabled;
+            ctx.ui.notify(
+                disabled ? "protect-paths: disabled for this session" : "protect-paths: re-enabled",
+                disabled ? "warning" : "info",
+            );
+        },
+    });
+
     // --- Directory protection for file-oriented tools ---
     pi.on("tool_call", async (event, ctx) => {
+        if (disabled) return;
         const isReadTool = READ_TOOLS.includes(event.toolName);
         const isWriteTool = WRITE_TOOLS.includes(event.toolName);
         if (!isReadTool && !isWriteTool) return;
@@ -507,6 +521,7 @@ export default function (pi: ExtensionAPI) {
 
     // --- Directory protection for bash commands ---
     pi.on("tool_call", async (event, ctx) => {
+        if (disabled) return;
         if (event.toolName !== "bash") return;
 
         await ensureJustBashLoaded();
@@ -529,6 +544,7 @@ export default function (pi: ExtensionAPI) {
 
     // --- Prevent Homebrew install/upgrade ---
     pi.on("tool_call", async (event, ctx) => {
+        if (disabled) return;
         if (event.toolName !== "bash") return;
 
         await ensureJustBashLoaded();
@@ -551,6 +567,7 @@ export default function (pi: ExtensionAPI) {
     // These complement upstream @aliou/pi-guardrails which covers rm -rf, sudo,
     // dd, mkfs, chmod -R 777, chown -R via AST structural matching.
     pi.on("tool_call", async (event, ctx) => {
+        if (disabled) return;
         if (event.toolName !== "bash") return;
 
         await ensureJustBashLoaded();
