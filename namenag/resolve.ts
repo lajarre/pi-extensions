@@ -67,3 +67,50 @@ export async function detectWorktree(cwd: string, exec: ExecFn): Promise<Worktre
 		return { isLinkedWorktree: false, worktreeLeaf: null };
 	}
 }
+
+const BRANCH_PREFIX_RE = /^(feat|fix|pr|hotfix)\//;
+const WORKTREE_PREFIX_RE = /^(feat|fix|pr|hotfix)-/;
+
+/** Strip conventional prefix from a git branch name. */
+export function stripBranchPrefix(branch: string): string {
+	return branch.replace(BRANCH_PREFIX_RE, "");
+}
+
+/** Strip conventional prefix from a worktree leaf name (uses `-` separator). */
+export function stripWorktreePrefix(leaf: string): string {
+	return leaf.replace(WORKTREE_PREFIX_RE, "");
+}
+
+/**
+ * Resolve branch segment.
+ *
+ * Returns stripped branch name, or null if:
+ * - Not in a git repo / detached HEAD
+ * - Branch is main or master
+ * - Branch slug matches worktree leaf (after prefix stripping on both)
+ */
+export async function resolveBranch(
+	cwd: string,
+	exec: ExecFn,
+	worktree: WorktreeInfo,
+): Promise<string | null> {
+	try {
+		const result = await exec("git", ["branch", "--show-current"], { cwd });
+		if (result.exitCode !== 0) return null;
+
+		const branch = result.stdout.trim();
+		if (!branch) return null;
+		if (branch === "main" || branch === "master") return null;
+
+		const slug = stripBranchPrefix(branch);
+
+		if (worktree.isLinkedWorktree && worktree.worktreeLeaf) {
+			const worktreeSlug = stripWorktreePrefix(worktree.worktreeLeaf);
+			if (slug === worktreeSlug) return null;
+		}
+
+		return truncateSegment(slug, SEGMENT_CAPS.branch);
+	} catch {
+		return null;
+	}
+}

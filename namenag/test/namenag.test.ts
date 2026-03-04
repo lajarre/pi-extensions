@@ -9,7 +9,14 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { detectWorktree, type ExecFn, truncateSegment } from "../resolve.js";
+import {
+	detectWorktree,
+	type ExecFn,
+	resolveBranch,
+	stripBranchPrefix,
+	stripWorktreePrefix,
+	truncateSegment,
+} from "../resolve.js";
 
 // ─── Minimal Mock Harness ────────────────────────────────────────────────────
 
@@ -305,6 +312,109 @@ describe("detectWorktree", () => {
 		};
 		const result = await detectWorktree("/home/user/.tree/fix-bug", exec);
 		assert.deepEqual(result, { isLinkedWorktree: true, worktreeLeaf: "fix-bug" });
+	});
+});
+
+describe("stripBranchPrefix", () => {
+	it("should strip feat/ prefix", () => {
+		assert.equal(stripBranchPrefix("feat/new-login"), "new-login");
+	});
+
+	it("should strip fix/ prefix", () => {
+		assert.equal(stripBranchPrefix("fix/broken-auth"), "broken-auth");
+	});
+
+	it("should strip pr/ prefix", () => {
+		assert.equal(stripBranchPrefix("pr/42-review"), "42-review");
+	});
+
+	it("should strip hotfix/ prefix", () => {
+		assert.equal(stripBranchPrefix("hotfix/urgent"), "urgent");
+	});
+
+	it("should not strip unknown prefixes", () => {
+		assert.equal(stripBranchPrefix("release/v2"), "release/v2");
+	});
+
+	it("should handle no prefix", () => {
+		assert.equal(stripBranchPrefix("my-branch"), "my-branch");
+	});
+});
+
+describe("stripWorktreePrefix", () => {
+	it("should strip feat- prefix from worktree leaf", () => {
+		assert.equal(stripWorktreePrefix("feat-new-app"), "new-app");
+	});
+
+	it("should strip fix- prefix", () => {
+		assert.equal(stripWorktreePrefix("fix-bug"), "bug");
+	});
+
+	it("should not strip unknown prefixes", () => {
+		assert.equal(stripWorktreePrefix("release-v2"), "release-v2");
+	});
+});
+
+describe("resolveBranch", () => {
+	it("should return stripped branch name", async () => {
+		const exec: ExecFn = async (_cmd, args) => {
+			if (args.includes("--show-current")) {
+				return { stdout: "feat/42-auth-refactor\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, "42-auth-refa…");
+	});
+
+	it("should skip main branch", async () => {
+		const exec: ExecFn = async () => ({ stdout: "main\n", stderr: "", exitCode: 0 });
+		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, null);
+	});
+
+	it("should skip master branch", async () => {
+		const exec: ExecFn = async () => ({ stdout: "master\n", stderr: "", exitCode: 0 });
+		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, null);
+	});
+
+	it("should skip when branch slug matches worktree leaf (both prefix-stripped)", async () => {
+		const exec: ExecFn = async () => ({ stdout: "feat/new-app\n", stderr: "", exitCode: 0 });
+		const wt = { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, null);
+	});
+
+	it("should include branch when different from worktree leaf", async () => {
+		const exec: ExecFn = async () => ({ stdout: "pr/7-live-prices\n", stderr: "", exitCode: 0 });
+		const wt = { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, "7-live-price…");
+	});
+
+	it("should return short branch without truncation", async () => {
+		const exec: ExecFn = async () => ({ stdout: "feat/login\n", stderr: "", exitCode: 0 });
+		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, "login");
+	});
+
+	it("should handle git failure gracefully", async () => {
+		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, null);
+	});
+
+	it("should handle detached HEAD", async () => {
+		const exec: ExecFn = async () => ({ stdout: "\n", stderr: "", exitCode: 0 });
+		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, null);
 	});
 });
 
