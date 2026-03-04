@@ -1,49 +1,64 @@
 # namenag
 
-Auto-name unnamed Pi sessions before they get lost in `/resume`.
+Auto-name unnamed Pi sessions with structured, hierarchical names.
 
 ## How It Works
+
+### Structured Naming Pipeline
+
+Names are built from segments ordered by decreasing scope:
+
+```
+project : worktree : branch : pr : subfolder : description
+  12        12        12     free     12          20      (char caps)
+```
+
+| Segment | Source | Example |
+|---------|--------|---------|
+| **Project** | Git remote repo name, or `project.org`/`area.org` dirname, or cwd basename | `system` |
+| **Worktree** | Linked worktree leaf name (prefix-stripped) | `new-app` |
+| **Branch** | `git branch --show-current`, stripped prefix, skip if = worktree or main | `7-live-price…` |
+| **PR** | `gh pr view` with 3s timeout | `pr70` |
+| **Subfolder** | Relative path from project root, slugified | `pkg-worker` |
+| **Description** | LLM (cheapest model), 1–3 words from recent messages | `review-triage` |
+
+**Examples:**
+- `system:new-app:7-live-price…:pr70:review-triage`
+- `system:pr60:ordering-fix`
+- `system:debug-worker-cache`
+- `butter-docs:shaping-api`
+
+### Triggers
 
 | Trigger | Threshold | Action |
 |---------|-----------|--------|
 | **Soft** | ≥10 user turns | Toast: "Session unnamed — `/name` to set one." |
-| **Hard** | ≥50 user turns | LLM generates name → `setSessionName()` → toast |
-| **Hard** | Compaction | LLM generates name → `setSessionName()` → toast |
+| **Hard** | ≥50 user turns | Structured name pipeline → `setSessionName()` |
+| **Hard** | Compaction | Structured name pipeline → `setSessionName()` |
+| **Command** | `/name-auto` | Force re-derive (works even if already named) |
 
-Once a session is named (manually or auto), all reminders stop.
+### Fallback
 
-### LLM Naming
-
-Automatically picks the cheapest available model (by input token cost)
-and sends it the first ~500 characters of user message text. Generates a
-2–4 word kebab-case name. Falls back to the session's current model if
-no cheaper alternative is found.
-
-Zero configuration required.
+If the structured pipeline produces an empty name (all resolvers fail AND LLM
+fails), falls back to old-style 2–4 word kebab-case LLM naming.
 
 ### Safety
 
 - Guards `ctx.hasUI` — silent in detached sessions and sub-agents
-- Never blocks — uses `notify()` only, no modal dialogs
-- Idempotent — generating flag prevents concurrent LLM calls
-- Lightweight — sends ≤500 chars of text, not the full conversation
+- `/name-auto` ignores `named` flag; auto-triggers respect it
+- All git/gh calls fail silently with graceful degradation
+- `gh` calls use 3s timeout — no blocking
 
 ## Install
 
 Symlink into your extensions directory:
 
 ```bash
-ln -s /path/to/pi-extensions/namenag/namenag.ts ~/.pi/agent/extensions/namenag.ts
-```
-
-Or run directly:
-
-```bash
-pi --extension /path/to/pi-extensions/namenag/namenag.ts
+ln -s /path/to/pi-extensions/namenag ~/.pi/agent/extensions/namenag
 ```
 
 ## Test
 
 ```bash
-npx tsx --test test/namenag.test.ts
+cd pi-extensions/namenag && npx tsx --test test/namenag.test.ts
 ```
