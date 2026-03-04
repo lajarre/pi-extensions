@@ -9,6 +9,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { truncateSegment } from "../resolve.js";
 
 // ─── Minimal Mock Harness ────────────────────────────────────────────────────
 
@@ -232,6 +233,28 @@ function registerTestHandlers(
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe("truncateSegment", () => {
+	it("should return short strings unchanged", () => {
+		assert.equal(truncateSegment("hello", 12), "hello");
+	});
+
+	it("should truncate at max with ellipsis", () => {
+		assert.equal(truncateSegment("very-long-branch-name", 12), "very-long-br…");
+	});
+
+	it("should handle exact length", () => {
+		assert.equal(truncateSegment("exactly12chr", 12), "exactly12chr");
+	});
+
+	it("should handle empty string", () => {
+		assert.equal(truncateSegment("", 12), "");
+	});
+
+	it("should return null for null input", () => {
+		assert.equal(truncateSegment(null, 12), null);
+	});
+});
 
 describe("namenag", () => {
 	describe("state initialization", () => {
