@@ -160,3 +160,13 @@ export async function resolveSubfolder(cwd: string, exec: ExecFn): Promise<strin
 		return null;
 	}
 }
+
+/**
+ * Assemble name segments with colon separator.
+ *
+ * Order: [branch, pr, subfolder, description]
+ * Filters null/empty. Each segment is already individually truncated.
+ */
+export function assembleSegments(segments: (string | null)[]): string {
+	return segments.filter((segment): segment is string => !!segment).join(":");
+}

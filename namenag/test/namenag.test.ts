@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+	assembleSegments,
 	detectWorktree,
 	type ExecFn,
 	resolveBranch,
@@ -501,6 +502,38 @@ describe("resolveSubfolder", () => {
 		const exec: ExecFn = async () => ({ stdout: "/repo\n", stderr: "", exitCode: 0 });
 		const result = await resolveSubfolder("/repo/src", exec);
 		assert.equal(result, "src");
+	});
+});
+
+describe("assembleSegments", () => {
+	it("should join all segments with colon", () => {
+		const result = assembleSegments(["42-auth", "pr42", "pkg-worker", "token-handler"]);
+		assert.equal(result, "42-auth:pr42:pkg-worker:token-handler");
+	});
+
+	it("should filter null segments", () => {
+		const result = assembleSegments([null, "pr42", null, "ordering-fix"]);
+		assert.equal(result, "pr42:ordering-fix");
+	});
+
+	it("should filter empty string segments", () => {
+		const result = assembleSegments(["", "pr42", "", "review"]);
+		assert.equal(result, "pr42:review");
+	});
+
+	it("should return empty string when all segments are null", () => {
+		const result = assembleSegments([null, null, null, null]);
+		assert.equal(result, "");
+	});
+
+	it("should handle single segment", () => {
+		const result = assembleSegments([null, null, null, "debug-cache"]);
+		assert.equal(result, "debug-cache");
+	});
+
+	it("should handle mixed null and empty", () => {
+		const result = assembleSegments([null, "", null, ""]);
+		assert.equal(result, "");
 	});
 });
 
