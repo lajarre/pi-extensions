@@ -48,28 +48,31 @@ export default function namenag(pi: ExtensionAPI) {
 		softNotified = true; // no more nags of any kind
 	}
 
-	/** Extract text from the first few user messages (≤500 chars total). */
+	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
 	function gatherContext(ctx: { sessionManager: { getBranch(): SessionEntry[] } }): string {
 		const entries = ctx.sessionManager.getBranch();
 		const MAX_CHARS = 500;
-		let text = "";
+		const MAX_MESSAGES = 3;
+		const userMessages: string[] = [];
 
-		for (const e of entries) {
+		for (let i = entries.length - 1; i >= 0 && userMessages.length < MAX_MESSAGES; i--) {
+			const e = entries[i];
 			if (e.type !== "message" || (e as any).message?.role !== "user") continue;
 
 			const content = (e as any).message.content;
+			let text = "";
 			if (typeof content === "string") {
-				text += content + "\n";
+				text = content;
 			} else if (Array.isArray(content)) {
 				for (const block of content) {
 					if (block.type === "text" && block.text) text += block.text + "\n";
 				}
 			}
 
-			if (text.length >= MAX_CHARS) break;
+			if (text.trim()) userMessages.push(text.trim());
 		}
 
-		return text.slice(0, MAX_CHARS).trim();
+		return userMessages.join("\n").slice(0, MAX_CHARS).trim();
 	}
 
 	/** Pick the cheapest available model with a valid API key, or fall back to ctx.model. */

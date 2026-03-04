@@ -135,7 +135,12 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
  */
 function registerTestHandlers(
 	api: any,
-	opts: { autoNameResult?: string; autoNameFails?: boolean; hasModel?: boolean } = {},
+	opts: {
+		autoNameResult?: string;
+		autoNameFails?: boolean;
+		hasModel?: boolean;
+		captureContext?: (context: string) => void;
+	} = {},
 ) {
 	const SOFT = 10;
 	const HARD = 50;
@@ -161,6 +166,32 @@ function registerTestHandlers(
 		ctx.ui.notify("Session unnamed — /name <name> to set one.", "info");
 	}
 
+	function gatherContext(ctx: { sessionManager: { getBranch(): any[] } }): string {
+		const entries = ctx.sessionManager.getBranch();
+		const MAX_CHARS = 500;
+		const MAX_MESSAGES = 3;
+		const userMessages: string[] = [];
+
+		for (let i = entries.length - 1; i >= 0 && userMessages.length < MAX_MESSAGES; i--) {
+			const e = entries[i];
+			if (e.type !== "message" || e.message?.role !== "user") continue;
+
+			const content = e.message.content;
+			let text = "";
+			if (typeof content === "string") {
+				text = content;
+			} else if (Array.isArray(content)) {
+				for (const block of content) {
+					if (block.type === "text" && block.text) text += `${block.text}\n`;
+				}
+			}
+
+			if (text.trim()) userMessages.push(text.trim());
+		}
+
+		return userMessages.join("\n").slice(0, MAX_CHARS).trim();
+	}
+
 	async function resolveModel(ctx: any) {
 		if (!hasModel) return null;
 		const available = ctx.modelRegistry.getAvailable();
@@ -181,6 +212,10 @@ function registerTestHandlers(
 
 	async function autoName(ctx: any): Promise<void> {
 		if (!isActive(ctx)) return;
+
+		const context = gatherContext(ctx);
+		opts.captureContext?.(context);
+		if (!context) return;
 
 		const resolved = await resolveModel(ctx);
 		if (!resolved) {
@@ -714,6 +749,83 @@ describe("namenag", () => {
 			}
 
 			assert.equal(mock.notifications.length, softCount, "No new notifications after fork to named session");
+		});
+	});
+
+	describe("context gathering", () => {
+		it("should use last 3 user messages in most-recent-first order", async () => {
+			const mock = createMockPi();
+			mock.ctx.sessionManager.getBranch = () => [
+				{
+					type: "message",
+					message: { role: "user", content: "oldest user" },
+				},
+				{
+					type: "message",
+					message: { role: "assistant", content: "ignored" },
+				},
+				{
+					type: "message",
+					message: { role: "user", content: "middle user" },
+				},
+				{
+					type: "message",
+					message: {
+						role: "user",
+						content: [{ type: "text", text: "newer user" }],
+					},
+				},
+				{
+					type: "message",
+					message: { role: "user", content: "latest user" },
+				},
+			];
+
+			let capturedContext = "";
+			registerTestHandlers(
+				mock.api,
+				{
+					autoNameResult: "context-test",
+					captureContext: (context: string) => {
+						capturedContext = context;
+					},
+				} as any,
+			);
+
+			await mock.fire("session_start");
+			await mock.fire("session_compact");
+
+			assert.equal(capturedContext, "latest user\nnewer user\nmiddle user");
+		});
+
+		it("should cap gathered context at 500 chars", async () => {
+			const mock = createMockPi();
+			const newest = "c".repeat(250);
+			const middle = "b".repeat(250);
+			const older = "a".repeat(250);
+			mock.ctx.sessionManager.getBranch = () => [
+				{ type: "message", message: { role: "user", content: older } },
+				{ type: "message", message: { role: "user", content: middle } },
+				{ type: "message", message: { role: "user", content: newest } },
+			];
+
+			let capturedContext = "";
+			registerTestHandlers(
+				mock.api,
+				{
+					autoNameResult: "context-test",
+					captureContext: (context: string) => {
+						capturedContext = context;
+					},
+				} as any,
+			);
+
+			await mock.fire("session_start");
+			await mock.fire("session_compact");
+
+			assert.equal(capturedContext.length, 500);
+			assert.ok(capturedContext.startsWith(newest));
+			assert.ok(!capturedContext.includes("a"));
 		});
 	});
 
