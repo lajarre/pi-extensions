@@ -97,10 +97,15 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		model: opts.hasModel === false ? undefined : expensiveModel,
 	};
 
+	const commands = new Map<string, { description?: string; handler: (args: any, ctx: any) => Promise<void> }>();
+
 	const api: any = {
 		on(event: string, handler: Handler) {
 			if (!handlers[event]) handlers[event] = [];
 			handlers[event].push(handler);
+		},
+		registerCommand(name: string, command: { description?: string; handler: (args: any, ctx: any) => Promise<void> }) {
+			commands.set(name, command);
 		},
 		setSessionName(name: string) {
 			sessionName = name;
@@ -114,6 +119,7 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		api,
 		ctx,
 		handlers,
+		commands,
 		notifications,
 		getSessionName: () => sessionName,
 		setSessionName: (n: string | undefined) => {
@@ -123,6 +129,11 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 			for (const h of handlers[event] ?? []) {
 				await h(eventData, ctx);
 			}
+		},
+		async runCommand(name: string, args: any = {}) {
+			const command = commands.get(name);
+			if (!command) throw new Error(`Command not found: ${name}`);
+			await command.handler(args, ctx);
 		},
 	};
 }
@@ -261,6 +272,23 @@ function registerTestHandlers(
 			generating = false;
 		}
 	}
+
+	async function forceAutoName(ctx: any): Promise<void> {
+		const wasNamed = named;
+		named = false;
+		try {
+			await autoName(ctx);
+		} finally {
+			if (!named) named = wasNamed;
+		}
+	}
+
+	api.registerCommand("name-auto", {
+		description: "Re-derive session name from environment + activity",
+		handler: async (_args: any, ctx: any) => {
+			await forceAutoName(ctx);
+		},
+	});
 
 	function resetState() {
 		turnCount = 0;
@@ -868,6 +896,28 @@ describe("namenag", () => {
 
 			assert.equal(mock.getSessionName(), undefined);
 			assert.ok(mock.notifications.some((n) => n.message.includes("Session unnamed")));
+		});
+	});
+
+	describe("/name-auto command", () => {
+		it("should register the name-auto command", () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api);
+
+			assert.ok(mock.commands.has("name-auto"));
+		});
+
+		it("should rename even when session is already named", async () => {
+			const mock = createMockPi();
+			mock.setSessionName("existing-name");
+			registerTestHandlers(mock.api, { structuredResult: "forced-rename" });
+			await mock.fire("session_start");
+
+			await mock.fire("session_compact");
+			assert.equal(mock.getSessionName(), "existing-name");
+
+			await mock.runCommand("name-auto", {});
+			assert.equal(mock.getSessionName(), "forced-rename");
 		});
 	});
 

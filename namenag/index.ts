@@ -224,6 +224,23 @@ export default function namenag(pi: ExtensionAPI) {
 		named = !!pi.getSessionName();
 	}
 
+	async function forceAutoName(ctx: any): Promise<void> {
+		const wasNamed = named;
+		named = false;
+		try {
+			await autoName(ctx);
+		} finally {
+			if (!named) named = wasNamed;
+		}
+	}
+
+	pi.registerCommand("name-auto", {
+		description: "Re-derive session name from environment + activity",
+		handler: async (_args, ctx) => {
+			await forceAutoName(ctx);
+		},
+	});
+
 	// ── Event Listeners ─────────────────────────────────────────────────
 
 	pi.on("session_start", async () => resetState());
