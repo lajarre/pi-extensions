@@ -19,6 +19,7 @@
 
 import { complete, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import {
 	DESCRIPTION_PROMPT,
 	structuredName,
@@ -238,6 +239,22 @@ export default function namenag(pi: ExtensionAPI) {
 		description: "Re-derive session name from environment + activity",
 		handler: async (_args, ctx) => {
 			await forceAutoName(ctx);
+		},
+	});
+
+	pi.registerTool({
+		name: "name_auto",
+		label: "Name Auto",
+		description:
+			"Derive a structured session name from environment (git branch, PR, project) + recent activity. " +
+			"Call this to name or rename the current session.",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			await forceAutoName(ctx);
+			const name = pi.getSessionName();
+			return {
+				content: [{ type: "text", text: name ? `Session named: ${name}` : "Failed to derive name" }],
+			};
 		},
 	});
 
