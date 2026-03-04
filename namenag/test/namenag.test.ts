@@ -13,14 +13,18 @@ import {
 	assembleSegments,
 	detectWorktree,
 	type ExecFn,
+	extractRepoName,
 	resolveBranch,
 	resolveDescription,
 	resolvePR,
+	resolveProject,
 	resolveSubfolder,
+	resolveWorktreeName,
 	stripBranchPrefix,
 	stripWorktreePrefix,
 	structuredName,
 	truncateSegment,
+	type WorktreeInfo,
 } from "../resolve.js";
 
 // ─── Minimal Mock Harness ────────────────────────────────────────────────────
@@ -433,6 +437,130 @@ describe("stripWorktreePrefix", () => {
 	});
 });
 
+describe("extractRepoName", () => {
+	it("should parse SSH remote URL", () => {
+		assert.equal(extractRepoName("git@github.com:org/repo.git"), "repo");
+	});
+
+	it("should parse HTTPS remote URL with .git", () => {
+		assert.equal(extractRepoName("https://github.com/org/repo.git"), "repo");
+	});
+
+	it("should parse HTTPS remote URL without .git", () => {
+		assert.equal(extractRepoName("https://github.com/org/repo"), "repo");
+	});
+
+	it("should parse SSH protocol URL", () => {
+		assert.equal(extractRepoName("ssh://git@github.com/org/repo.git"), "repo");
+	});
+
+	it("should return null for empty string", () => {
+		assert.equal(extractRepoName(""), null);
+	});
+
+	it("should handle URL with trailing whitespace", () => {
+		assert.equal(extractRepoName("git@github.com:org/repo.git\n"), "repo");
+	});
+});
+
+describe("resolveProject", () => {
+	it("should extract repo name from git remote", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (cmd === "git" && args.includes("get-url")) {
+				return {
+					stdout: "git@github.com:mitsuhiko/pi-coding-agent.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const result = await resolveProject("/some/repo", exec);
+		assert.equal(result, "pi-coding-ag…");
+	});
+
+	it("should extract short repo name without truncation", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "https://github.com/org/namenag.git\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const result = await resolveProject("/some/repo", exec);
+		assert.equal(result, "namenag");
+	});
+
+	it("should fall back to cwd basename when no git remote", async () => {
+		const exec: ExecFn = async () => {
+			return { stdout: "", stderr: "fatal: not a git repository", exitCode: 128 };
+		};
+		const result = await resolveProject("/home/user/my-project", exec);
+		assert.equal(result, "my-project");
+	});
+
+	it("should truncate long cwd basename", async () => {
+		const exec: ExecFn = async () => {
+			return { stdout: "", stderr: "fatal", exitCode: 128 };
+		};
+		const result = await resolveProject("/home/user/very-long-project-name", exec);
+		assert.equal(result, "very-long-pr…");
+	});
+
+	it("should handle HTTPS URL without .git suffix", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "https://github.com/org/my-repo\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const result = await resolveProject("/some/path", exec);
+		assert.equal(result, "my-repo");
+	});
+
+	it("should handle exec throwing", async () => {
+		const exec: ExecFn = async () => {
+			throw new Error("nope");
+		};
+		const result = await resolveProject("/home/user/fallback-dir", exec);
+		assert.equal(result, "fallback-dir");
+	});
+});
+
+describe("resolveWorktreeName", () => {
+	it("should return stripped worktree leaf for linked worktree", () => {
+		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" };
+		assert.equal(resolveWorktreeName(wt), "new-app");
+	});
+
+	it("should return null for non-linked worktree", () => {
+		const wt: WorktreeInfo = { isLinkedWorktree: false, worktreeLeaf: null };
+		assert.equal(resolveWorktreeName(wt), null);
+	});
+
+	it("should truncate long worktree names", () => {
+		const wt: WorktreeInfo = {
+			isLinkedWorktree: true,
+			worktreeLeaf: "feat-very-long-worktree-name",
+		};
+		assert.equal(resolveWorktreeName(wt), "very-long-wo…");
+	});
+
+	it("should handle worktree leaf without conventional prefix", () => {
+		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: "my-feature" };
+		assert.equal(resolveWorktreeName(wt), "my-feature");
+	});
+
+	it("should handle worktree with null leaf", () => {
+		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: null };
+		assert.equal(resolveWorktreeName(wt), null);
+	});
+
+	it("should strip fix- prefix", () => {
+		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: "fix-auth-bug" };
+		assert.equal(resolveWorktreeName(wt), "auth-bug");
+	});
+});
+
 describe("resolveBranch", () => {
 	it("should return stripped branch name", async () => {
 		const exec: ExecFn = async (_cmd, args) => {
@@ -586,6 +714,23 @@ describe("assembleSegments", () => {
 		assert.equal(result, "42-auth:pr42:pkg-worker:token-handler");
 	});
 
+	it("should handle 6-segment structured name", () => {
+		const result = assembleSegments([
+			"myproj",
+			"new-app",
+			"42-auth",
+			"pr42",
+			"pkg-worker",
+			"token-handler",
+		]);
+		assert.equal(result, "myproj:new-app:42-auth:pr42:pkg-worker:token-handler");
+	});
+
+	it("should filter null project and worktree segments", () => {
+		const result = assembleSegments([null, null, "42-auth", "pr42", null, "ordering-fix"]);
+		assert.equal(result, "42-auth:pr42:ordering-fix");
+	});
+
 	it("should filter null segments", () => {
 		const result = assembleSegments([null, "pr42", null, "ordering-fix"]);
 		assert.equal(result, "pr42:ordering-fix");
@@ -664,6 +809,9 @@ describe("structuredName", () => {
 			if (cmd === "git" && args.includes("--show-current")) {
 				return { stdout: "pr/7-live-prices\n", stderr: "", exitCode: 0 };
 			}
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "git@github.com:org/myproj.git\n", stderr: "", exitCode: 0 };
+			}
 			if (cmd === "gh") {
 				return { stdout: "70\n", stderr: "", exitCode: 0 };
 			}
@@ -672,7 +820,7 @@ describe("structuredName", () => {
 		const llm = async () => "review-triage";
 
 		const result = await structuredName("/home/.tree/feat-new-app", exec, "context", llm);
-		assert.equal(result, "7-live-price…:pr70:review-triage");
+		assert.equal(result, "myproj:new-app:7-live-price…:pr70:review-triage");
 	});
 
 	it("should produce description-only when on main with no PR", async () => {
@@ -686,6 +834,9 @@ describe("structuredName", () => {
 			if (args.includes("--show-current")) {
 				return { stdout: "main\n", stderr: "", exitCode: 0 };
 			}
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+			}
 			if (cmd === "gh") {
 				return { stdout: "", stderr: "no PR", exitCode: 1 };
 			}
@@ -694,17 +845,17 @@ describe("structuredName", () => {
 		const llm = async () => "debug-worker-cache";
 
 		const result = await structuredName("/repo", exec, "context", llm);
-		assert.equal(result, "debug-worker-cache");
+		assert.equal(result, "myrepo:debug-worker-cache");
 	});
 
-	it("should return empty string when all resolvers fail", async () => {
+	it("should return project-only when all other resolvers fail", async () => {
 		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
 		const llm = async () => {
 			throw new Error("fail");
 		};
 
 		const result = await structuredName("/no-git", exec, "", llm);
-		assert.equal(result, "");
+		assert.equal(result, "no-git");
 	});
 
 	it("should include subfolder when in subdirectory", async () => {
@@ -718,6 +869,9 @@ describe("structuredName", () => {
 			if (args.includes("--show-current")) {
 				return { stdout: "main\n", stderr: "", exitCode: 0 };
 			}
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+			}
 			if (cmd === "gh") {
 				return { stdout: "70\n", stderr: "", exitCode: 0 };
 			}
@@ -726,12 +880,12 @@ describe("structuredName", () => {
 		const llm = async () => "cache-refactor";
 
 		const result = await structuredName("/repo/pkg/worker", exec, "context", llm);
-		assert.equal(result, "pr70:pkg-worker:cache-refactor");
+		assert.equal(result, "myrepo:pr70:pkg-worker:cache-refactor");
 	});
 });
 
 describe("structured naming integration", () => {
-	it("should produce branch:pr:description for feature branch with PR", async () => {
+	it("should produce project:branch:pr:description for feature branch with PR", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("--show-toplevel")) {
 				return { stdout: "/repo\n", stderr: "", exitCode: 0 };
@@ -742,6 +896,9 @@ describe("structured naming integration", () => {
 			if (cmd === "git" && args.includes("--show-current")) {
 				return { stdout: "feat/42-auth-refactor\n", stderr: "", exitCode: 0 };
 			}
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+			}
 			if (cmd === "gh") {
 				return { stdout: "42\n", stderr: "", exitCode: 0 };
 			}
@@ -750,10 +907,10 @@ describe("structured naming integration", () => {
 		const llm = async () => "token-handler";
 
 		const result = await structuredName("/repo", exec, "context", llm);
-		assert.equal(result, "42-auth-refa…:pr42:token-handler");
+		assert.equal(result, "myrepo:42-auth-refa…:pr42:token-handler");
 	});
 
-	it("should produce pr:subfolder:description when branch matches worktree", async () => {
+	it("should produce project:worktree:pr:subfolder:description when branch matches worktree", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("--show-toplevel")) {
 				return { stdout: "/home/user/.tree/feat-new-app\n", stderr: "", exitCode: 0 };
@@ -764,6 +921,9 @@ describe("structured naming integration", () => {
 			if (cmd === "git" && args.includes("--show-current")) {
 				return { stdout: "feat/new-app\n", stderr: "", exitCode: 0 };
 			}
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "git@github.com:org/myproj.git\n", stderr: "", exitCode: 0 };
+			}
 			if (cmd === "gh") {
 				return { stdout: "70\n", stderr: "", exitCode: 0 };
 			}
@@ -772,10 +932,10 @@ describe("structured naming integration", () => {
 		const llm = async () => "cache-refactor";
 
 		const result = await structuredName("/home/user/.tree/feat-new-app/pkg/worker", exec, "context", llm);
-		assert.equal(result, "pr70:pkg-worker:cache-refactor");
+		assert.equal(result, "myproj:new-app:pr70:pkg-worker:cache-refactor");
 	});
 
-	it("should produce description-only on main without PR", async () => {
+	it("should produce project:description on main without PR", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("--show-toplevel")) {
 				return { stdout: "/repo\n", stderr: "", exitCode: 0 };
@@ -786,6 +946,9 @@ describe("structured naming integration", () => {
 			if (cmd === "git" && args.includes("--show-current")) {
 				return { stdout: "main\n", stderr: "", exitCode: 0 };
 			}
+			if (cmd === "git" && args.includes("get-url")) {
+				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+			}
 			if (cmd === "gh") {
 				return { stdout: "", stderr: "no pull request", exitCode: 1 };
 			}
@@ -794,10 +957,10 @@ describe("structured naming integration", () => {
 		const llm = async () => "debug-worker-cache";
 
 		const result = await structuredName("/repo", exec, "context", llm);
-		assert.equal(result, "debug-worker-cache");
+		assert.equal(result, "myrepo:debug-worker-cache");
 	});
 
-	it("should fall back to full LLM naming when no git and description fails", async () => {
+	it("should use project basename when no git and description fails", async () => {
 		const exec: ExecFn = async () => ({
 			stdout: "",
 			stderr: "fatal: not a git repository",
@@ -806,31 +969,16 @@ describe("structured naming integration", () => {
 		const llm = async () => {
 			throw new Error("description failed");
 		};
-		const structured = await structuredName("/plain-dir", exec, "context", llm);
-		assert.equal(structured, "");
-
-		const mock = createMockPi();
-		registerTestHandlers(mock.api, {
-			structuredResult: structured,
-			fallbackResult: "shaping-api",
-		});
-		await mock.fire("session_start");
-		await mock.fire("session_compact");
-
-		assert.equal(mock.getSessionName(), "shaping-api");
+		const result = await structuredName("/plain-dir", exec, "context", llm);
+		assert.equal(result, "plain-dir");
 	});
 });
 
 describe("fallback behavior", () => {
-	it("should use old-style LLM when all structured segments are null", async () => {
-		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
-		const llm = async () => "ignored";
-		const structured = await structuredName("/plain-dir", exec, "", llm);
-		assert.equal(structured, "");
-
+	it("should use old-style LLM when structured name is empty", async () => {
 		const mock = createMockPi();
 		registerTestHandlers(mock.api, {
-			structuredResult: structured,
+			structuredResult: "",
 			fallbackResult: "legacy-fallback-name",
 		});
 		await mock.fire("session_start");
@@ -840,16 +988,9 @@ describe("fallback behavior", () => {
 	});
 
 	it("should soft-notify when both structured and fallback fail", async () => {
-		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
-		const llm = async () => {
-			throw new Error("description failed");
-		};
-		const structured = await structuredName("/plain-dir", exec, "context", llm);
-		assert.equal(structured, "");
-
 		const mock = createMockPi();
 		registerTestHandlers(mock.api, {
-			structuredResult: structured,
+			structuredResult: "",
 			fallbackResult: "",
 		});
 		await mock.fire("session_start");

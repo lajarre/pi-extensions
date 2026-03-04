@@ -1,10 +1,12 @@
-import { basename, relative, resolve as pathResolve } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, relative, resolve as pathResolve } from "node:path";
 
 /**
  * Segment resolvers for structured session naming.
  *
- * Each resolver is a pure function: (cwd, exec) → string | null.
- * Deterministic segments (branch, PR, subfolder) never touch LLM.
+ * Resolver outputs are deterministic and testable.
+ * Deterministic segments (project/worktree/branch/PR/subfolder) never touch LLM.
  * Description resolver takes an LLM callback for injection.
  */
 
@@ -17,6 +19,8 @@ export type ExecFn = (
 
 /** Segment caps per spec. */
 export const SEGMENT_CAPS = {
+	project: 12,
+	worktree: 12,
 	branch: 12,
 	subfolder: 12,
 	description: 20,
@@ -79,6 +83,74 @@ export function stripBranchPrefix(branch: string): string {
 /** Strip conventional prefix from a worktree leaf name (uses `-` separator). */
 export function stripWorktreePrefix(leaf: string): string {
 	return leaf.replace(WORKTREE_PREFIX_RE, "");
+}
+
+/**
+ * Extract repository name from git remote URL.
+ *
+ * Handles:
+ * - git@github.com:org/repo.git
+ * - https://github.com/org/repo.git
+ * - https://github.com/org/repo
+ * - ssh://git@github.com/org/repo.git
+ */
+export function extractRepoName(remoteUrl: string): string | null {
+	const trimmed = remoteUrl.trim();
+	if (!trimmed) return null;
+
+	const clean = trimmed.replace(/\.git$/, "");
+	const splitAt = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf(":"));
+	if (splitAt < 0 || splitAt >= clean.length - 1) return null;
+
+	return clean.slice(splitAt + 1);
+}
+
+/**
+ * Resolve project segment.
+ *
+ * Strategy:
+ * 1) git remote get-url origin -> repo name
+ * 2) walk upward for project.org / area.org (stop before homedir)
+ * 3) cwd basename fallback
+ */
+export async function resolveProject(cwd: string, exec: ExecFn): Promise<string | null> {
+	try {
+		const result = await exec("git", ["remote", "get-url", "origin"], {
+			cwd,
+			timeout: 3000,
+		});
+
+		if (result.exitCode === 0) {
+			const repo = extractRepoName(result.stdout);
+			if (repo) return truncateSegment(repo, SEGMENT_CAPS.project);
+		}
+	} catch {
+		// fall through
+	}
+
+	const home = pathResolve(homedir());
+	let dir = pathResolve(cwd);
+
+	while (dir !== "/" && dir !== home) {
+		if (existsSync(pathResolve(dir, "project.org")) || existsSync(pathResolve(dir, "area.org"))) {
+			return truncateSegment(basename(dir), SEGMENT_CAPS.project);
+		}
+
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+
+	const fallback = basename(pathResolve(cwd));
+	return fallback ? truncateSegment(fallback, SEGMENT_CAPS.project) : null;
+}
+
+/** Resolve worktree segment from linked worktree metadata. */
+export function resolveWorktreeName(worktree: WorktreeInfo): string | null {
+	if (!worktree.isLinkedWorktree || !worktree.worktreeLeaf) return null;
+
+	const leaf = stripWorktreePrefix(worktree.worktreeLeaf);
+	return truncateSegment(leaf, SEGMENT_CAPS.worktree);
 }
 
 /**
@@ -164,7 +236,7 @@ export async function resolveSubfolder(cwd: string, exec: ExecFn): Promise<strin
 /**
  * Assemble name segments with colon separator.
  *
- * Order: [branch, pr, subfolder, description]
+ * Order: [project, worktree, branch, pr, subfolder, description]
  * Filters null/empty. Each segment is already individually truncated.
  */
 export function assembleSegments(segments: (string | null)[]): string {
@@ -226,13 +298,15 @@ export async function structuredName(
 	llm: DescriptionLLMFn,
 ): Promise<string> {
 	const worktree = await detectWorktree(cwd, exec);
+	const worktreeName = resolveWorktreeName(worktree);
 
-	const [branch, pr, subfolder, description] = await Promise.all([
+	const [project, branch, pr, subfolder, description] = await Promise.all([
+		resolveProject(cwd, exec),
 		resolveBranch(cwd, exec, worktree),
 		resolvePR(cwd, exec),
 		resolveSubfolder(cwd, exec),
 		resolveDescription(context, llm),
 	]);
 
-	return assembleSegments([branch, pr, subfolder, description]);
+	return assembleSegments([project, worktreeName, branch, pr, subfolder, description]);
 }
