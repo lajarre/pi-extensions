@@ -19,11 +19,17 @@
 
 import { complete, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@mariozechner/pi-coding-agent";
+import {
+	DESCRIPTION_PROMPT,
+	structuredName,
+	type DescriptionLLMFn,
+	type ExecFn,
+} from "./resolve.js";
 
 const SOFT_THRESHOLD = 10;
 const HARD_THRESHOLD = 50;
 
-const NAME_PROMPT = `You are a session naming assistant. Given conversation context, produce a short session name.
+const FALLBACK_NAME_PROMPT = `You are a session naming assistant. Given conversation context, produce a short session name.
 
 Rules:
 - 2–4 words, kebab-case (e.g. "refactor-auth-module", "search-feature-shaping")
@@ -36,6 +42,18 @@ export default function namenag(pi: ExtensionAPI) {
 	let named = false;
 	let softNotified = false;
 	let generating = false;
+
+	const piExec: ExecFn = async (command, args, options) => {
+		const result = await pi.exec(command, args, {
+			cwd: options?.cwd,
+			timeout: options?.timeout,
+		});
+		return {
+			stdout: result.stdout,
+			stderr: result.stderr,
+			exitCode: result.exitCode,
+		};
+	};
 
 	// ── Helpers ──────────────────────────────────────────────────────────
 
@@ -98,7 +116,50 @@ export default function namenag(pi: ExtensionAPI) {
 		return null;
 	}
 
-	/** Generate a session name via LLM and apply it. */
+	async function fallbackName(
+		ctx: any,
+		context: string,
+		resolved: { model: any; apiKey: string },
+	): Promise<boolean> {
+		try {
+			const userMessage: Message = {
+				role: "user",
+				content: [{ type: "text", text: `<conversation>\n${context}\n</conversation>` }],
+				timestamp: Date.now(),
+			};
+
+			const response = await complete(
+				resolved.model,
+				{ systemPrompt: FALLBACK_NAME_PROMPT, messages: [userMessage] },
+				{ apiKey: resolved.apiKey, maxTokens: 64 },
+			);
+
+			const raw = response.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("")
+				.trim();
+
+			const name = raw
+				.toLowerCase()
+				.replace(/[^a-z0-9-\s]/g, "")
+				.replace(/\s+/g, "-")
+				.replace(/-+/g, "-")
+				.replace(/^-|-$/g, "")
+				.slice(0, 60);
+
+			if (!name) return false;
+
+			pi.setSessionName(name);
+			markNamed();
+			ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Generate a structured session name and apply fallback when needed. */
 	async function autoName(ctx: any): Promise<void> {
 		if (!isActive(ctx)) return;
 
@@ -113,43 +174,37 @@ export default function namenag(pi: ExtensionAPI) {
 
 		generating = true;
 		try {
-			const userMessage: Message = {
-				role: "user",
-				content: [{ type: "text", text: `<conversation>\n${context}\n</conversation>` }],
-				timestamp: Date.now(),
+			const llmCallback: DescriptionLLMFn = async (contextText: string) => {
+				const userMessage: Message = {
+					role: "user",
+					content: [{ type: "text", text: `<conversation>\n${contextText}\n</conversation>` }],
+					timestamp: Date.now(),
+				};
+
+				const response = await complete(
+					resolved.model,
+					{ systemPrompt: DESCRIPTION_PROMPT, messages: [userMessage] },
+					{ apiKey: resolved.apiKey, maxTokens: 64 },
+				);
+
+				return response.content
+					.filter((c): c is { type: "text"; text: string } => c.type === "text")
+					.map((c) => c.text)
+					.join("")
+					.trim();
 			};
 
-			const response = await complete(
-				resolved.model,
-				{ systemPrompt: NAME_PROMPT, messages: [userMessage] },
-				{ apiKey: resolved.apiKey, maxTokens: 64 },
-			);
-
-			const raw = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("")
-				.trim();
-
-			// Sanitize: keep only kebab-case-friendly chars, truncate
-			const name = raw
-				.toLowerCase()
-				.replace(/[^a-z0-9-\s]/g, "")
-				.replace(/\s+/g, "-")
-				.replace(/-+/g, "-")
-				.replace(/^-|-$/g, "")
-				.slice(0, 60);
-
-			if (!name) {
-				softNotify(ctx);
+			const name = await structuredName(ctx.cwd, piExec, context, llmCallback);
+			if (name) {
+				pi.setSessionName(name);
+				markNamed();
+				ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
 				return;
 			}
 
-			pi.setSessionName(name);
-			markNamed();
-			ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
+			const didFallback = await fallbackName(ctx, context, resolved);
+			if (!didFallback) softNotify(ctx);
 		} catch {
-			// LLM call failed — fall back to soft notify
 			softNotify(ctx);
 		} finally {
 			generating = false;

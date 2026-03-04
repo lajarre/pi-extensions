@@ -140,6 +140,8 @@ function registerTestHandlers(
 		autoNameFails?: boolean;
 		hasModel?: boolean;
 		captureContext?: (context: string) => void;
+		structuredResult?: string;
+		fallbackResult?: string;
 	} = {},
 ) {
 	const SOFT = 10;
@@ -227,9 +229,17 @@ function registerTestHandlers(
 		try {
 			if (opts.autoNameFails) throw new Error("LLM failed");
 
-			const raw = opts.autoNameResult ?? "test-session-name";
+			const structuredRaw = opts.structuredResult ?? opts.autoNameResult ?? "test-session-name";
+			const structured = structuredRaw.trim().slice(0, 60);
+			if (structured) {
+				api.setSessionName(structured);
+				markNamed();
+				ctx.ui.notify(`Auto-named: ${structured}. /name to change.`, "info");
+				return;
+			}
 
-			const name = raw
+			const fallbackRaw = opts.fallbackResult ?? "";
+			const fallback = fallbackRaw
 				.toLowerCase()
 				.replace(/[^a-z0-9-\s]/g, "")
 				.replace(/\s+/g, "-")
@@ -237,14 +247,14 @@ function registerTestHandlers(
 				.replace(/^-|-$/g, "")
 				.slice(0, 60);
 
-			if (!name) {
+			if (!fallback) {
 				softNotify(ctx);
 				return;
 			}
 
-			api.setSessionName(name);
+			api.setSessionName(fallback);
 			markNamed();
-			ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
+			ctx.ui.notify(`Auto-named: ${fallback}. /name to change.`, "info");
 		} catch {
 			softNotify(ctx);
 		} finally {
@@ -782,15 +792,12 @@ describe("namenag", () => {
 			];
 
 			let capturedContext = "";
-			registerTestHandlers(
-				mock.api,
-				{
-					autoNameResult: "context-test",
-					captureContext: (context: string) => {
-						capturedContext = context;
-					},
-				} as any,
-			);
+			registerTestHandlers(mock.api, {
+				autoNameResult: "context-test",
+				captureContext: (context: string) => {
+					capturedContext = context;
+				},
+			});
 
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
@@ -810,15 +817,12 @@ describe("namenag", () => {
 			];
 
 			let capturedContext = "";
-			registerTestHandlers(
-				mock.api,
-				{
-					autoNameResult: "context-test",
-					captureContext: (context: string) => {
-						capturedContext = context;
-					},
-				} as any,
-			);
+			registerTestHandlers(mock.api, {
+				autoNameResult: "context-test",
+				captureContext: (context: string) => {
+					capturedContext = context;
+				},
+			});
 
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
@@ -826,6 +830,44 @@ describe("namenag", () => {
 			assert.equal(capturedContext.length, 500);
 			assert.ok(capturedContext.startsWith(newest));
 			assert.ok(!capturedContext.includes("a"));
+		});
+	});
+
+	describe("structured pipeline wiring", () => {
+		it("should keep colon-separated structured names", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, {
+				structuredResult: "branch:pr42:pkg-worker:debug-cache",
+			});
+			await mock.fire("session_start");
+			await mock.fire("session_compact");
+
+			assert.equal(mock.getSessionName(), "branch:pr42:pkg-worker:debug-cache");
+		});
+
+		it("should fall back to old-style name when structured result is empty", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, {
+				structuredResult: "",
+				fallbackResult: "fallback-session-name",
+			});
+			await mock.fire("session_start");
+			await mock.fire("session_compact");
+
+			assert.equal(mock.getSessionName(), "fallback-session-name");
+		});
+
+		it("should soft-notify when structured and fallback are both empty", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, {
+				structuredResult: "",
+				fallbackResult: "",
+			});
+			await mock.fire("session_start");
+			await mock.fire("session_compact");
+
+			assert.equal(mock.getSessionName(), undefined);
+			assert.ok(mock.notifications.some((n) => n.message.includes("Session unnamed")));
 		});
 	});
 
@@ -953,9 +995,12 @@ describe("namenag", () => {
 	});
 
 	describe("name sanitization", () => {
-		it("should sanitize LLM output to kebab-case", async () => {
+		it("should sanitize fallback LLM output to kebab-case", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { autoNameResult: '  "Refactor Auth Module!"  ' });
+			registerTestHandlers(mock.api, {
+				structuredResult: "",
+				fallbackResult: '  "Refactor Auth Module!"  ',
+			});
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
 
