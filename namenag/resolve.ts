@@ -1,4 +1,4 @@
-import { basename, resolve as pathResolve } from "node:path";
+import { basename, relative, resolve as pathResolve } from "node:path";
 
 /**
  * Segment resolvers for structured session naming.
@@ -134,6 +134,28 @@ export async function resolvePR(cwd: string, exec: ExecFn): Promise<string | nul
 		if (Number.isNaN(num)) return null;
 
 		return `pr${num}`;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Resolve subfolder segment.
+ *
+ * Project root: git root (`git rev-parse --show-toplevel`).
+ * Returns slugified relative path from root to cwd, or null if at root.
+ */
+export async function resolveSubfolder(cwd: string, exec: ExecFn): Promise<string | null> {
+	try {
+		const result = await exec("git", ["rev-parse", "--show-toplevel"], { cwd });
+		if (result.exitCode !== 0) return null;
+
+		const root = result.stdout.trim();
+		const rel = relative(root, cwd);
+		if (!rel || rel === ".") return null;
+
+		const slug = rel.replace(/\//g, "-");
+		return truncateSegment(slug, SEGMENT_CAPS.subfolder);
 	} catch {
 		return null;
 	}

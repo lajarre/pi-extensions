@@ -14,6 +14,7 @@ import {
 	type ExecFn,
 	resolveBranch,
 	resolvePR,
+	resolveSubfolder,
 	stripBranchPrefix,
 	stripWorktreePrefix,
 	truncateSegment,
@@ -468,6 +469,38 @@ describe("resolvePR", () => {
 		};
 		await resolvePR("/repo", exec);
 		assert.equal(capturedTimeout, 3000);
+	});
+});
+
+describe("resolveSubfolder", () => {
+	it("should return null when at project root", async () => {
+		const exec: ExecFn = async () => ({ stdout: "/home/user/project\n", stderr: "", exitCode: 0 });
+		const result = await resolveSubfolder("/home/user/project", exec);
+		assert.equal(result, null);
+	});
+
+	it("should return slugified relative path for nested cwd", async () => {
+		const exec: ExecFn = async () => ({ stdout: "/home/user/project\n", stderr: "", exitCode: 0 });
+		const result = await resolveSubfolder("/home/user/project/pkg/worker", exec);
+		assert.equal(result, "pkg-worker");
+	});
+
+	it("should truncate long subfolder paths", async () => {
+		const exec: ExecFn = async () => ({ stdout: "/home/user/project\n", stderr: "", exitCode: 0 });
+		const result = await resolveSubfolder("/home/user/project/packages/very-long-name/src", exec);
+		assert.equal(result, "packages-ver…");
+	});
+
+	it("should return null for non-git directory (no project.org fallback in tests)", async () => {
+		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+		const result = await resolveSubfolder("/home/user/plain-dir/sub", exec);
+		assert.equal(result, null);
+	});
+
+	it("should handle single-level nesting", async () => {
+		const exec: ExecFn = async () => ({ stdout: "/repo\n", stderr: "", exitCode: 0 });
+		const result = await resolveSubfolder("/repo/src", exec);
+		assert.equal(result, "src");
 	});
 });
 
