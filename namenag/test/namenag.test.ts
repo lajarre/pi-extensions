@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { truncateSegment } from "../resolve.js";
+import { detectWorktree, type ExecFn, truncateSegment } from "../resolve.js";
 
 // ─── Minimal Mock Harness ────────────────────────────────────────────────────
 
@@ -253,6 +253,58 @@ describe("truncateSegment", () => {
 
 	it("should return null for null input", () => {
 		assert.equal(truncateSegment(null, 12), null);
+	});
+});
+
+describe("detectWorktree", () => {
+	it("should detect linked worktree", async () => {
+		const exec: ExecFn = async (_cmd, args) => {
+			if (args.includes("--show-toplevel")) {
+				return { stdout: "/home/user/.tree/feat-new-app\n", stderr: "", exitCode: 0 };
+			}
+			if (args.includes("--git-common-dir")) {
+				return { stdout: "../../main-repo/.git\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const result = await detectWorktree("/home/user/.tree/feat-new-app", exec);
+		assert.deepEqual(result, { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" });
+	});
+
+	it("should detect main worktree (not linked)", async () => {
+		const exec: ExecFn = async (_cmd, args) => {
+			if (args.includes("--show-toplevel")) {
+				return { stdout: "/home/user/main-repo\n", stderr: "", exitCode: 0 };
+			}
+			if (args.includes("--git-common-dir")) {
+				return { stdout: ".git\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const result = await detectWorktree("/home/user/main-repo", exec);
+		assert.deepEqual(result, { isLinkedWorktree: false, worktreeLeaf: null });
+	});
+
+	it("should handle non-git directory", async () => {
+		const exec: ExecFn = async () => {
+			return { stdout: "", stderr: "fatal: not a git repository", exitCode: 128 };
+		};
+		const result = await detectWorktree("/home/user/plain-dir", exec);
+		assert.deepEqual(result, { isLinkedWorktree: false, worktreeLeaf: null });
+	});
+
+	it("should handle absolute git-common-dir outside toplevel", async () => {
+		const exec: ExecFn = async (_cmd, args) => {
+			if (args.includes("--show-toplevel")) {
+				return { stdout: "/home/user/.tree/fix-bug\n", stderr: "", exitCode: 0 };
+			}
+			if (args.includes("--git-common-dir")) {
+				return { stdout: "/home/user/main-repo/.git\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const result = await detectWorktree("/home/user/.tree/fix-bug", exec);
+		assert.deepEqual(result, { isLinkedWorktree: true, worktreeLeaf: "fix-bug" });
 	});
 });
 
