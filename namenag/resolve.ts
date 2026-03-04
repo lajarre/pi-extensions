@@ -114,3 +114,27 @@ export async function resolveBranch(
 		return null;
 	}
 }
+
+/**
+ * Resolve PR segment via `gh pr view`.
+ *
+ * Returns `pr<N>` string or null. Fails silently for all errors:
+ * gh not installed, no PR, timeout, network, non-numeric output.
+ */
+export async function resolvePR(cwd: string, exec: ExecFn): Promise<string | null> {
+	try {
+		const result = await exec("gh", ["pr", "view", "--json", "number", "-q", ".number"], {
+			cwd,
+			timeout: 3000,
+		});
+
+		if (result.exitCode !== 0) return null;
+
+		const num = parseInt(result.stdout.trim(), 10);
+		if (Number.isNaN(num)) return null;
+
+		return `pr${num}`;
+	} catch {
+		return null;
+	}
+}

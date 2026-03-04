@@ -13,6 +13,7 @@ import {
 	detectWorktree,
 	type ExecFn,
 	resolveBranch,
+	resolvePR,
 	stripBranchPrefix,
 	stripWorktreePrefix,
 	truncateSegment,
@@ -415,6 +416,58 @@ describe("resolveBranch", () => {
 		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, null);
+	});
+});
+
+describe("resolvePR", () => {
+	it("should return pr<N> on success", async () => {
+		const exec: ExecFn = async () => ({ stdout: "42\n", stderr: "", exitCode: 0 });
+		const result = await resolvePR("/repo", exec);
+		assert.equal(result, "pr42");
+	});
+
+	it("should return null when no PR", async () => {
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "no pull requests found",
+			exitCode: 1,
+		});
+		const result = await resolvePR("/repo", exec);
+		assert.equal(result, null);
+	});
+
+	it("should return null on timeout (simulated via rejection)", async () => {
+		const exec: ExecFn = async () => {
+			throw new Error("timed out");
+		};
+		const result = await resolvePR("/repo", exec);
+		assert.equal(result, null);
+	});
+
+	it("should return null when gh not installed", async () => {
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "command not found: gh",
+			exitCode: 127,
+		});
+		const result = await resolvePR("/repo", exec);
+		assert.equal(result, null);
+	});
+
+	it("should return null for non-numeric output", async () => {
+		const exec: ExecFn = async () => ({ stdout: "not-a-number\n", stderr: "", exitCode: 0 });
+		const result = await resolvePR("/repo", exec);
+		assert.equal(result, null);
+	});
+
+	it("should pass 3s timeout to exec", async () => {
+		let capturedTimeout: number | undefined;
+		const exec: ExecFn = async (_cmd, _args, opts) => {
+			capturedTimeout = opts?.timeout;
+			return { stdout: "7\n", stderr: "", exitCode: 0 };
+		};
+		await resolvePR("/repo", exec);
+		assert.equal(capturedTimeout, 3000);
 	});
 });
 
