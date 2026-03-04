@@ -51,7 +51,7 @@ export default function namenag(pi: ExtensionAPI) {
 		return {
 			stdout: result.stdout,
 			stderr: result.stderr,
-			exitCode: result.exitCode,
+			exitCode: result.code,
 		};
 	};
 
