@@ -14,6 +14,7 @@ import {
 	detectWorktree,
 	type ExecFn,
 	resolveBranch,
+	resolveDescription,
 	resolvePR,
 	resolveSubfolder,
 	stripBranchPrefix,
@@ -534,6 +535,46 @@ describe("assembleSegments", () => {
 	it("should handle mixed null and empty", () => {
 		const result = assembleSegments([null, "", null, ""]);
 		assert.equal(result, "");
+	});
+});
+
+describe("resolveDescription", () => {
+	it("should return LLM-generated description", async () => {
+		const llm = async (_context: string) => "refactor-auth";
+		const result = await resolveDescription("Help me refactor auth", llm);
+		assert.equal(result, "refactor-auth");
+	});
+
+	it("should truncate long descriptions at 20 chars", async () => {
+		const llm = async () => "very-long-description-name";
+		const result = await resolveDescription("context", llm);
+		assert.equal(result, "very-long-descriptio…");
+	});
+
+	it("should sanitize LLM output to kebab-case", async () => {
+		const llm = async () => '"Refactor Auth Module!"';
+		const result = await resolveDescription("context", llm);
+		assert.equal(result, "refactor-auth-module");
+	});
+
+	it("should return null on LLM failure", async () => {
+		const llm = async () => {
+			throw new Error("LLM failed");
+		};
+		const result = await resolveDescription("context", llm);
+		assert.equal(result, null);
+	});
+
+	it("should return null on empty LLM response", async () => {
+		const llm = async () => "";
+		const result = await resolveDescription("context", llm);
+		assert.equal(result, null);
+	});
+
+	it("should return null on empty context", async () => {
+		const llm = async () => "should-not-reach";
+		const result = await resolveDescription("", llm);
+		assert.equal(result, null);
 	});
 });
 

@@ -170,3 +170,45 @@ export async function resolveSubfolder(cwd: string, exec: ExecFn): Promise<strin
 export function assembleSegments(segments: (string | null)[]): string {
 	return segments.filter((segment): segment is string => !!segment).join(":");
 }
+
+/** LLM callback type — takes conversation context, returns raw name string. */
+export type DescriptionLLMFn = (context: string) => Promise<string>;
+
+/** Prompt for LLM description — only 1–3 word activity description. */
+export const DESCRIPTION_PROMPT = `You are a session naming assistant. Given recent conversation context, produce a short activity description.
+
+Rules:
+- 1–3 words, kebab-case (e.g. "refactor-auth", "debug-cache", "shaping-api")
+- Describe the current activity or topic
+- Be specific, not generic (not "coding" or "chatting")
+- Output ONLY the description, nothing else — no quotes, no explanation`;
+
+/**
+ * Resolve the LLM description segment.
+ *
+ * Takes conversation context string and an LLM callback.
+ * Sanitizes output to kebab-case, truncates at 20 chars.
+ */
+export async function resolveDescription(
+	context: string,
+	llm: DescriptionLLMFn,
+): Promise<string | null> {
+	if (!context) return null;
+
+	try {
+		const raw = await llm(context);
+
+		const name = raw
+			.toLowerCase()
+			.replace(/[^a-z0-9-\s]/g, "")
+			.replace(/\s+/g, "-")
+			.replace(/-+/g, "-")
+			.replace(/^-|-$/g, "");
+
+		if (!name) return null;
+
+		return truncateSegment(name, SEGMENT_CAPS.description);
+	} catch {
+		return null;
+	}
+}
