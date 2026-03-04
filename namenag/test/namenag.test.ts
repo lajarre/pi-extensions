@@ -19,6 +19,7 @@ import {
 	resolveSubfolder,
 	stripBranchPrefix,
 	stripWorktreePrefix,
+	structuredName,
 	truncateSegment,
 } from "../resolve.js";
 
@@ -575,6 +576,84 @@ describe("resolveDescription", () => {
 		const llm = async () => "should-not-reach";
 		const result = await resolveDescription("", llm);
 		assert.equal(result, null);
+	});
+});
+
+describe("structuredName", () => {
+	it("should produce full structured name with all segments", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (cmd === "git" && args.includes("--show-toplevel")) {
+				return { stdout: "/home/.tree/feat-new-app\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--git-common-dir")) {
+				return { stdout: "/home/main/.git\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--show-current")) {
+				return { stdout: "pr/7-live-prices\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "gh") {
+				return { stdout: "70\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const llm = async () => "review-triage";
+
+		const result = await structuredName("/home/.tree/feat-new-app", exec, "context", llm);
+		assert.equal(result, "7-live-price…:pr70:review-triage");
+	});
+
+	it("should produce description-only when on main with no PR", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (args.includes("--show-toplevel")) {
+				return { stdout: "/repo\n", stderr: "", exitCode: 0 };
+			}
+			if (args.includes("--git-common-dir")) {
+				return { stdout: ".git\n", stderr: "", exitCode: 0 };
+			}
+			if (args.includes("--show-current")) {
+				return { stdout: "main\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "gh") {
+				return { stdout: "", stderr: "no PR", exitCode: 1 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const llm = async () => "debug-worker-cache";
+
+		const result = await structuredName("/repo", exec, "context", llm);
+		assert.equal(result, "debug-worker-cache");
+	});
+
+	it("should return empty string when all resolvers fail", async () => {
+		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+		const llm = async () => {
+			throw new Error("fail");
+		};
+
+		const result = await structuredName("/no-git", exec, "", llm);
+		assert.equal(result, "");
+	});
+
+	it("should include subfolder when in subdirectory", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (args.includes("--show-toplevel")) {
+				return { stdout: "/repo\n", stderr: "", exitCode: 0 };
+			}
+			if (args.includes("--git-common-dir")) {
+				return { stdout: ".git\n", stderr: "", exitCode: 0 };
+			}
+			if (args.includes("--show-current")) {
+				return { stdout: "main\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "gh") {
+				return { stdout: "70\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const llm = async () => "cache-refactor";
+
+		const result = await structuredName("/repo/pkg/worker", exec, "context", llm);
+		assert.equal(result, "pr70:pkg-worker:cache-refactor");
 	});
 });
 

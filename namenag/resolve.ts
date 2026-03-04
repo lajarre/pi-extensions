@@ -212,3 +212,27 @@ export async function resolveDescription(
 		return null;
 	}
 }
+
+/**
+ * Orchestrate all segment resolvers and assemble the structured name.
+ *
+ * detectWorktree runs first (needed by resolveBranch).
+ * Remaining resolvers run in parallel.
+ */
+export async function structuredName(
+	cwd: string,
+	exec: ExecFn,
+	context: string,
+	llm: DescriptionLLMFn,
+): Promise<string> {
+	const worktree = await detectWorktree(cwd, exec);
+
+	const [branch, pr, subfolder, description] = await Promise.all([
+		resolveBranch(cwd, exec, worktree),
+		resolvePR(cwd, exec),
+		resolveSubfolder(cwd, exec),
+		resolveDescription(context, llm),
+	]);
+
+	return assembleSegments([branch, pr, subfolder, description]);
+}
