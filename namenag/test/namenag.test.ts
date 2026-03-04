@@ -730,6 +730,186 @@ describe("structuredName", () => {
 	});
 });
 
+describe("structured naming integration", () => {
+	it("should produce branch:pr:description for feature branch with PR", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (cmd === "git" && args.includes("--show-toplevel")) {
+				return { stdout: "/repo\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--git-common-dir")) {
+				return { stdout: ".git\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--show-current")) {
+				return { stdout: "feat/42-auth-refactor\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "gh") {
+				return { stdout: "42\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const llm = async () => "token-handler";
+
+		const result = await structuredName("/repo", exec, "context", llm);
+		assert.equal(result, "42-auth-refa…:pr42:token-handler");
+	});
+
+	it("should produce pr:subfolder:description when branch matches worktree", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (cmd === "git" && args.includes("--show-toplevel")) {
+				return { stdout: "/home/user/.tree/feat-new-app\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--git-common-dir")) {
+				return { stdout: "/home/user/main/.git\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--show-current")) {
+				return { stdout: "feat/new-app\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "gh") {
+				return { stdout: "70\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const llm = async () => "cache-refactor";
+
+		const result = await structuredName("/home/user/.tree/feat-new-app/pkg/worker", exec, "context", llm);
+		assert.equal(result, "pr70:pkg-worker:cache-refactor");
+	});
+
+	it("should produce description-only on main without PR", async () => {
+		const exec: ExecFn = async (cmd, args) => {
+			if (cmd === "git" && args.includes("--show-toplevel")) {
+				return { stdout: "/repo\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--git-common-dir")) {
+				return { stdout: ".git\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args.includes("--show-current")) {
+				return { stdout: "main\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "gh") {
+				return { stdout: "", stderr: "no pull request", exitCode: 1 };
+			}
+			return { stdout: "", stderr: "", exitCode: 1 };
+		};
+		const llm = async () => "debug-worker-cache";
+
+		const result = await structuredName("/repo", exec, "context", llm);
+		assert.equal(result, "debug-worker-cache");
+	});
+
+	it("should fall back to full LLM naming when no git and description fails", async () => {
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "fatal: not a git repository",
+			exitCode: 128,
+		});
+		const llm = async () => {
+			throw new Error("description failed");
+		};
+		const structured = await structuredName("/plain-dir", exec, "context", llm);
+		assert.equal(structured, "");
+
+		const mock = createMockPi();
+		registerTestHandlers(mock.api, {
+			structuredResult: structured,
+			fallbackResult: "shaping-api",
+		});
+		await mock.fire("session_start");
+		await mock.fire("session_compact");
+
+		assert.equal(mock.getSessionName(), "shaping-api");
+	});
+});
+
+describe("fallback behavior", () => {
+	it("should use old-style LLM when all structured segments are null", async () => {
+		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+		const llm = async () => "ignored";
+		const structured = await structuredName("/plain-dir", exec, "", llm);
+		assert.equal(structured, "");
+
+		const mock = createMockPi();
+		registerTestHandlers(mock.api, {
+			structuredResult: structured,
+			fallbackResult: "legacy-fallback-name",
+		});
+		await mock.fire("session_start");
+		await mock.fire("session_compact");
+
+		assert.equal(mock.getSessionName(), "legacy-fallback-name");
+	});
+
+	it("should soft-notify when both structured and fallback fail", async () => {
+		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+		const llm = async () => {
+			throw new Error("description failed");
+		};
+		const structured = await structuredName("/plain-dir", exec, "context", llm);
+		assert.equal(structured, "");
+
+		const mock = createMockPi();
+		registerTestHandlers(mock.api, {
+			structuredResult: structured,
+			fallbackResult: "",
+		});
+		await mock.fire("session_start");
+		await mock.fire("session_compact");
+
+		assert.equal(mock.getSessionName(), undefined);
+		assert.ok(mock.notifications.some((n) => n.message.includes("Session unnamed")));
+	});
+});
+
+describe("/name-auto vs auto-triggers", () => {
+	it("auto-trigger (compaction) should NOT overwrite existing name", async () => {
+		const mock = createMockPi();
+		mock.setSessionName("existing-name");
+		registerTestHandlers(mock.api, { structuredResult: "should-not-apply" });
+		await mock.fire("session_start");
+
+		await mock.fire("session_compact");
+
+		assert.equal(mock.getSessionName(), "existing-name");
+	});
+
+	it("/name-auto SHOULD overwrite existing name", async () => {
+		const mock = createMockPi();
+		mock.setSessionName("existing-name");
+		registerTestHandlers(mock.api, { structuredResult: "forced-new-name" });
+		await mock.fire("session_start");
+
+		await mock.runCommand("name-auto", {});
+
+		assert.equal(mock.getSessionName(), "forced-new-name");
+	});
+});
+
+describe("segment edge cases", () => {
+	it("short branch should fit without truncation", async () => {
+		const exec: ExecFn = async (_cmd, args) => {
+			if (args.includes("--show-current")) {
+				return { stdout: "feat/42-auth\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "fatal", exitCode: 1 };
+		};
+		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
+		const result = await resolveBranch("/repo", exec, wt);
+		assert.equal(result, "42-auth");
+	});
+
+	it("PR numbers should stay naturally short", async () => {
+		const exec: ExecFn = async () => ({ stdout: "7\n", stderr: "", exitCode: 0 });
+		const result = await resolvePR("/repo", exec);
+		assert.equal(result, "pr7");
+	});
+
+	it("deeply nested subfolder should truncate with ellipsis", async () => {
+		const exec: ExecFn = async () => ({ stdout: "/repo\n", stderr: "", exitCode: 0 });
+		const result = await resolveSubfolder("/repo/packages/deep/nested/path/module", exec);
+		assert.equal(result, "packages-dee…");
+	});
+});
+
 describe("namenag", () => {
 	describe("state initialization", () => {
 		it("should not nag if session already has a name on start", async () => {
