@@ -1,0 +1,3 @@
+Plan written to `pi-extensions/doc/feature/2026-03-05-tmux-worker-spawn/wave-01/plan-tmux-worker-spawn.md`.
+
+**Summary:** 11 tasks covering the full spec — scaffolding, 5 pure-logic modules (sanitizer, parser, persistence, naming, drift), tmux execution core, command + tool registration, comprehensive tests (11 test groups matching every QA criterion), and README update. Dependencies flow linearly with one parallel branch (task 11). Four ADR candidates flagged: frozen namespace rationale, warn-only drift, `send-keys` choice, and config constant vs. flag.
