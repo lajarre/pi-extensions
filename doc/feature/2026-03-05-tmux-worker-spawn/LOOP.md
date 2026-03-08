@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| spec_paths | `pi-extensions/doc/feature/2026-03-05-tmux-worker-spawn/spec.md` |
+| spec_paths | `pi-extensions/doc/feature/2026-03-05-tmux-worker-spawn/spec.md`<br>`pi-extensions/doc/feature/2026-03-05-tmux-worker-spawn/spec-wave02.md` |
 | feature_dir | `pi-extensions/doc/feature/2026-03-05-tmux-worker-spawn` |
 | planning_strategy | `single` |
 | planner_models | `claude-opus-4-6` |
@@ -68,6 +68,51 @@ Verified at: 2026-03-06T01:58:30Z.
 - Command: `cd /Users/alex/workspace/aidev/pi-extensions && npx tsx --test test/spawn-worker.test.ts`
 - Result: PASS (`# tests 19`, `# suites 11`, `# pass 19`, `# fail 0`)
 
+## Wave 02 — pre-dispatch
+- Timestamp: 2026-03-08T18:19:46Z
+- Checks: tmux/pi/tsx availability, role resolution with write
+- Verdict: GO
+
+## Wave 02 — batch 01 / try-01
+- Timestamp: 2026-03-08T18:45:00Z
+- Probe: GO
+- Implementer: PASS
+- Spec review: PASS
+- Quality: PASS
+
+## Wave 02 — batch 02 / try-01
+- Timestamp: 2026-03-08T19:00:00Z
+- Probe: GO
+- Implementer: PASS
+- Spec review: PASS
+- Quality: FAIL (minimality scope attribution)
+
+## Wave 02 — batch 02 / try-02
+- Timestamp: 2026-03-08T19:16:00Z
+- Probe: GO
+- Implementer: PASS
+- Spec review: PASS
+- Quality: PASS
+
+## Wave 02 — batch 03 / try-01
+- Timestamp: 2026-03-08T19:25:00Z
+- Probe: GO
+- Implementer: PASS
+- Spec review: PASS
+- Quality: PASS
+
+## Wave 02 — batch 04 / try-01
+- Timestamp: 2026-03-08T19:34:00Z
+- Probe: GO
+- Implementer: PASS
+- Spec review: PASS
+- Quality: PASS
+
+## Wave 02 — manager QA gate
+- Timestamp: 2026-03-08T19:39:21Z
+- Command: `cd /Users/alex/workspace/aidev/pi-extensions && npx tsx --test test/spawn-worker.test.ts`
+- Result: PASS (`# tests 30`, `# suites 18`, `# pass 30`, `# fail 0`)
+
 # Memory
 
 ## After Batch 01 (Wave 01)
@@ -83,3 +128,16 @@ Verified at: 2026-03-06T01:58:30Z.
   behavior proof.
 - **Action**: add explicit assertion per acceptance bullet, especially for
   config-mode branches (`default` vs `inherit`).
+
+## After Batch 02 (Wave 02)
+- **Category**: process
+- **Lesson**: quality minimality checks can mis-attribute prior batch changes
+  when multiple batches touch the same file without intermediate commits.
+- **Action**: include explicit baseline references to accepted prior-batch
+  scopes in retry prompts and reviews.
+
+## After Batch 03 (Wave 02)
+- **Category**: process
+- **Lesson**: planner stub-output issue repeated across waves.
+- **Action**: enforce planner artifact sanity gate before plan-review dispatch
+  (non-empty task list, files table, dependency section).

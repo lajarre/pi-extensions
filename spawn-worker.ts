@@ -8,10 +8,19 @@ import { Type } from "@sinclair/typebox";
 
 export type SplitDirection = "v" | "h";
 export type SessionDirMode = "default" | "inherit";
+export type DriftPolicy = "warn" | "enforce";
 
 export interface SpawnState {
 	workerNamespace: string;
 	nextSlot: number;
+}
+
+export interface WorkerRecord {
+	name: string;
+	paneId: string;
+	namespace: string;
+	slot: number;
+	createdAt: number;
 }
 
 export interface SpawnRequest {
@@ -35,6 +44,25 @@ export interface SpawnFailure {
 }
 
 export type SpawnResult = SpawnSuccess | SpawnFailure;
+
+export interface SendWorkerRequest {
+	target: string;
+	message: string;
+}
+
+export interface SendWorkerSuccess {
+	ok: true;
+	workerName: string;
+	message: string;
+}
+
+export interface SendWorkerFailure {
+	ok: false;
+	error: string;
+	fallback: string;
+}
+
+export type SendWorkerResult = SendWorkerSuccess | SendWorkerFailure;
 
 export interface PlannedSpawn {
 	namespace: string;
@@ -66,11 +94,13 @@ export interface ManagedWorkerEntry {
 
 export const SPAWN_STATE_CUSTOM_TYPE = "spawn-worker-state";
 export const SPAWN_MANAGED_CUSTOM_TYPE = "spawn-worker-managed";
+export const SPAWN_REGISTRY_CUSTOM_TYPE = "spawn-worker-registry";
 export const MAX_SUFFIX_LENGTH = 64;
 export const AUTO_PREFIX = "wrkr-";
 
 // V1: default to normal Pi behavior (do not force --session-dir).
 export const sessionDirMode: SessionDirMode = "default";
+export const driftPolicy: DriftPolicy = "warn";
 
 export class SpawnWorkerError extends Error {
 	constructor(message: string) {
@@ -189,6 +219,305 @@ export function loadState(
 
 export function saveState(pi: Pick<ExtensionAPI, "appendEntry">, state: SpawnState): void {
 	pi.appendEntry(SPAWN_STATE_CUSTOM_TYPE, state);
+}
+
+export function normalizeRegistry(data: unknown): WorkerRecord[] | undefined {
+	if (!Array.isArray(data)) return undefined;
+
+	const records: WorkerRecord[] = [];
+	for (const item of data) {
+		if (!item || typeof item !== "object") continue;
+
+		const maybeName = (item as { name?: unknown }).name;
+		const maybePaneId = (item as { paneId?: unknown }).paneId;
+		const maybeNamespace = (item as { namespace?: unknown }).namespace;
+		const maybeSlot = (item as { slot?: unknown }).slot;
+		const maybeCreatedAt = (item as { createdAt?: unknown }).createdAt;
+
+		if (typeof maybeName !== "string") continue;
+		const name = maybeName.trim();
+		if (!name) continue;
+
+		if (typeof maybePaneId !== "string") continue;
+		const paneId = maybePaneId.trim();
+		if (!paneId) continue;
+
+		if (typeof maybeNamespace !== "string") continue;
+		const namespace = maybeNamespace.trim();
+		if (!namespace) continue;
+
+		const slot = Number(maybeSlot);
+		if (!Number.isInteger(slot) || slot < 1) continue;
+
+		const createdAt = Number(maybeCreatedAt);
+		if (!Number.isFinite(createdAt) || createdAt < 0) continue;
+
+		records.push({
+			name,
+			paneId,
+			namespace,
+			slot,
+			createdAt,
+		});
+	}
+
+	return records;
+}
+
+export function loadRegistry(
+	ctx: Pick<ExtensionContext, "sessionManager">,
+): WorkerRecord[] {
+	const branch = ctx.sessionManager.getBranch();
+	for (let i = branch.length - 1; i >= 0; i -= 1) {
+		const entry = branch[i] as SessionEntry;
+		if (entry.type !== "custom") continue;
+		if (entry.customType !== SPAWN_REGISTRY_CUSTOM_TYPE) continue;
+		const records = normalizeRegistry(entry.data);
+		if (records) return records;
+	}
+	return [];
+}
+
+export function saveRegistry(
+	pi: Pick<ExtensionAPI, "appendEntry">,
+	records: WorkerRecord[],
+): void {
+	pi.appendEntry(SPAWN_REGISTRY_CUSTOM_TYPE, records);
+}
+
+export function upsertWorker(
+	records: WorkerRecord[],
+	worker: WorkerRecord,
+): WorkerRecord[] {
+	const deduped = records.filter((record) => record.name !== worker.name);
+	deduped.push(worker);
+	return deduped;
+}
+
+export function formatWorkerAge(createdAt: number, now: number = Date.now()): string {
+	const deltaSeconds = Math.max(0, Math.floor((now - createdAt) / 1000));
+	if (deltaSeconds < 5) return "just now";
+	if (deltaSeconds < 60) return `${deltaSeconds}s ago`;
+
+	const deltaMinutes = Math.floor(deltaSeconds / 60);
+	if (deltaMinutes < 60) return `${deltaMinutes}m ago`;
+
+	const deltaHours = Math.floor(deltaMinutes / 60);
+	if (deltaHours < 24) return `${deltaHours}h ago`;
+
+	const deltaDays = Math.floor(deltaHours / 24);
+	return `${deltaDays}d ago`;
+}
+
+export function formatWorkerLine(
+	record: WorkerRecord,
+	now: number = Date.now(),
+): string {
+	return (
+		`${record.name} | pane ${record.paneId} | slot ${record.slot} | `
+		+ `${formatWorkerAge(record.createdAt, now)}`
+	);
+}
+
+export function buildWorkersListMessage(
+	records: WorkerRecord[],
+	currentNamespace?: string,
+	now: number = Date.now(),
+): string {
+	if (records.length === 0) {
+		return "No known workers. Run /spawn to create a managed worker.";
+	}
+
+	const inCurrentNamespace = currentNamespace
+		? records
+			.filter((record) => record.namespace === currentNamespace)
+			.slice()
+			.sort((left, right) => right.createdAt - left.createdAt)
+		: [];
+	const inOtherNamespaces = currentNamespace
+		? records
+			.filter((record) => record.namespace !== currentNamespace)
+			.slice()
+			.sort((left, right) => right.createdAt - left.createdAt)
+		: records
+			.slice()
+			.sort((left, right) => right.createdAt - left.createdAt);
+
+	const lines = ["Known workers (session-control registry):"];
+	if (currentNamespace && inCurrentNamespace.length > 0) {
+		lines.push(`Current namespace (${currentNamespace}):`);
+		for (const record of inCurrentNamespace) {
+			lines.push(`- ${formatWorkerLine(record, now)}`);
+		}
+	}
+
+	if (inOtherNamespaces.length > 0) {
+		if (currentNamespace && inCurrentNamespace.length > 0) {
+			lines.push("Other namespaces:");
+		}
+		for (const record of inOtherNamespaces) {
+			lines.push(`- ${formatWorkerLine(record, now)}`);
+		}
+	}
+
+	return lines.join("\n");
+}
+
+export function parseSendWorkerCommandArgs(args: string): SendWorkerRequest {
+	const trimmed = args.trim();
+	if (!trimmed) {
+		throw new SpawnWorkerError("Usage: /send-worker <target> <message>");
+	}
+
+	const firstWhitespace = trimmed.search(/\s/);
+	if (firstWhitespace === -1) {
+		throw new SpawnWorkerError("Usage: /send-worker <target> <message>");
+	}
+
+	const target = trimmed.slice(0, firstWhitespace).trim();
+	const message = trimmed.slice(firstWhitespace).trim();
+	if (!target || !message) {
+		throw new SpawnWorkerError("Usage: /send-worker <target> <message>");
+	}
+
+	return { target, message };
+}
+
+export function resolveWorkerTarget(
+	registry: WorkerRecord[],
+	target: string,
+): WorkerRecord {
+	const trimmedTarget = target.trim();
+	if (!trimmedTarget) {
+		throw new SpawnWorkerError("Worker target cannot be empty.");
+	}
+
+	if (registry.length === 0) {
+		throw new SpawnWorkerError(
+			"No known workers. Run /spawn to create a managed worker.",
+		);
+	}
+
+	const exactMatch = registry.find((record) => record.name === trimmedTarget);
+	if (exactMatch) return exactMatch;
+
+	const selectMostRecent = (records: WorkerRecord[]): WorkerRecord | undefined => {
+		let latest: WorkerRecord | undefined;
+		for (const record of records) {
+			if (!latest || record.createdAt >= latest.createdAt) {
+				latest = record;
+			}
+		}
+		return latest;
+	};
+
+	if (trimmedTarget.startsWith(AUTO_PREFIX)) {
+		const slotFromToken = parseSlot(trimmedTarget.slice(AUTO_PREFIX.length));
+		if (slotFromToken) {
+			const bySlotToken = selectMostRecent(
+				registry.filter((record) => record.slot === slotFromToken),
+			);
+			if (bySlotToken) return bySlotToken;
+		}
+	}
+
+	if (/^[0-9]+$/.test(trimmedTarget)) {
+		const numericSlot = parseSlot(trimmedTarget);
+		if (numericSlot) {
+			const byNumericSlot = selectMostRecent(
+				registry.filter((record) => record.slot === numericSlot),
+			);
+			if (byNumericSlot) return byNumericSlot;
+		}
+	}
+
+	const availableNames = registry.map((record) => record.name).join(", ");
+	throw new SpawnWorkerError(
+		`Unknown worker target "${trimmedTarget}". Known workers: ${availableNames}`,
+	);
+}
+
+export function buildSendWorkerBridgeArgs(
+	workerName: string,
+	message: string,
+): string[] {
+	return [
+		"-p",
+		"--session-control",
+		"--control-session",
+		workerName,
+		"--send-session-message",
+		message,
+		"--send-session-mode",
+		"follow_up",
+		"--send-session-wait",
+		"message_processed",
+	];
+}
+
+export function buildSendWorkerFallback(
+	workerName: string,
+	message: string,
+): string {
+	return (
+		"Fallback (existing session-control utility path): run "
+		+ "pi -p --session-control "
+		+ `--control-session ${shellQuote(workerName)} `
+		+ `--send-session-message ${shellQuote(message)} `
+		+ "--send-session-mode follow_up "
+		+ "--send-session-wait message_processed"
+	);
+}
+
+export async function sendWorkerMessage(
+	pi: Pick<ExtensionAPI, "exec">,
+	workerName: string,
+	message: string,
+): Promise<SendWorkerResult> {
+	const trimmedWorker = workerName.trim();
+	if (!trimmedWorker) {
+		return {
+			ok: false,
+			error: "Worker name cannot be empty.",
+			fallback: "Fallback: resolve a worker via /workers, then retry.",
+		};
+	}
+
+	if (!message.trim()) {
+		return {
+			ok: false,
+			error: "Message cannot be empty.",
+			fallback: "Usage: /send-worker <target> <message>",
+		};
+	}
+
+	const args = buildSendWorkerBridgeArgs(trimmedWorker, message);
+	try {
+		const result = await pi.exec("pi", args);
+		if (result.code === 0) {
+			return {
+				ok: true,
+				workerName: trimmedWorker,
+				message: `Sent message to ${trimmedWorker} via session-control bridge.`,
+			};
+		}
+
+		const details = summarizeExecFailure(result.stdout, result.stderr, result.code);
+		return {
+			ok: false,
+			error: `session-control bridge failed: ${details}`,
+			fallback: buildSendWorkerFallback(trimmedWorker, message),
+		};
+	} catch (error: unknown) {
+		const detail = error instanceof Error && error.message.trim()
+			? error.message.trim()
+			: "unknown execution error";
+		return {
+			ok: false,
+			error: `session-control bridge failed: ${detail}`,
+			fallback: buildSendWorkerFallback(trimmedWorker, message),
+		};
+	}
 }
 
 export function resolveParentName(pi: Pick<ExtensionAPI, "getSessionName">): string {
@@ -380,6 +709,16 @@ export async function spawnWorker(
 	await sendLaunchCommand(pi, paneId, launchCommand);
 	saveState(pi, planned.nextState);
 
+	const registry = loadRegistry(ctx);
+	const nextRegistry = upsertWorker(registry, {
+		name: planned.childName,
+		paneId,
+		namespace: planned.namespace,
+		slot: planned.slot,
+		createdAt: Date.now(),
+	});
+	saveRegistry(pi, nextRegistry);
+
 	return {
 		ok: true,
 		paneId,
@@ -500,11 +839,23 @@ export function driftWarningMessage(
 	);
 }
 
+export function driftEnforcedMessage(
+	currentName: string | undefined,
+	expectedName: string,
+): string {
+	const shownCurrent = currentName?.trim() || "(unnamed)";
+	return (
+		`Managed worker name drift: ${shownCurrent}. `
+		+ `Enforce policy active; auto-restored to ${expectedName}.`
+	);
+}
+
 export function warnOnDrift(
-	pi: Pick<ExtensionAPI, "getSessionName">,
+	pi: Pick<ExtensionAPI, "getSessionName" | "setSessionName">,
 	ctx: Pick<ExtensionContext, "hasUI" | "ui">,
 	managedInfo: ManagedWorkerInfo,
 	lastDriftKey: string | undefined,
+	policy: DriftPolicy = driftPolicy,
 ): string | undefined {
 	if (!managedInfo.isManaged) return lastDriftKey;
 	const currentName = pi.getSessionName();
@@ -513,10 +864,15 @@ export function warnOnDrift(
 	}
 
 	const driftKey = currentName?.trim() || "(unnamed)";
-	if (driftKey === lastDriftKey) return lastDriftKey;
+	if (policy === "enforce" && managedInfo.expectedName) {
+		pi.setSessionName(managedInfo.expectedName);
+	}
 
-	if (ctx.hasUI) {
-		ctx.ui.notify(driftWarningMessage(currentName, managedInfo), "warning");
+	if (driftKey !== lastDriftKey && ctx.hasUI) {
+		const message = policy === "enforce" && managedInfo.expectedName
+			? driftEnforcedMessage(currentName, managedInfo.expectedName)
+			: driftWarningMessage(currentName, managedInfo);
+		ctx.ui.notify(message, "warning");
 	}
 
 	return driftKey;
@@ -536,11 +892,23 @@ export default function spawnWorkerExtension(pi: ExtensionAPI) {
 			pi.appendEntry(SPAWN_MANAGED_CUSTOM_TYPE, managedEntry);
 		}
 
-		lastDriftKey = warnOnDrift(pi, ctx, managedInfo, lastDriftKey);
+		lastDriftKey = warnOnDrift(
+			pi,
+			ctx,
+			managedInfo,
+			lastDriftKey,
+			driftPolicy,
+		);
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
-		lastDriftKey = warnOnDrift(pi, ctx, managedInfo, lastDriftKey);
+		lastDriftKey = warnOnDrift(
+			pi,
+			ctx,
+			managedInfo,
+			lastDriftKey,
+			driftPolicy,
+		);
 	});
 
 	pi.registerCommand("spawn", {
@@ -563,6 +931,50 @@ export default function spawnWorkerExtension(pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify(result.error, "error");
+		},
+	});
+
+	pi.registerCommand("workers", {
+		description:
+			"List known spawned workers for session-control orchestration.",
+		handler: async (_args, ctx) => {
+			const registry = loadRegistry(ctx);
+			const namespace = loadState(ctx)?.workerNamespace;
+			const output = buildWorkersListMessage(registry, namespace);
+			ctx.ui.notify(output, registry.length === 0 ? "warning" : "info");
+		},
+	});
+
+	pi.registerCommand("send-worker", {
+		description:
+			"Send to worker via session-control bridge first (not tmux keystrokes): /send-worker <target> <message>",
+		handler: async (args, ctx) => {
+			let request: SendWorkerRequest;
+			try {
+				request = parseSendWorkerCommandArgs(args ?? "");
+			} catch (error: unknown) {
+				const failure = toSpawnFailure(error);
+				ctx.ui.notify(failure.error, "error");
+				return;
+			}
+
+			const registry = loadRegistry(ctx);
+			let worker: WorkerRecord;
+			try {
+				worker = resolveWorkerTarget(registry, request.target);
+			} catch (error: unknown) {
+				const failure = toSpawnFailure(error);
+				ctx.ui.notify(failure.error, "error");
+				return;
+			}
+
+			const result = await sendWorkerMessage(pi, worker.name, request.message);
+			if (result.ok) {
+				ctx.ui.notify(result.message, "info");
+				return;
+			}
+
+			ctx.ui.notify(`${result.error}\n${result.fallback}`, "error");
 		},
 	});
 
