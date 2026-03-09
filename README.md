@@ -14,4 +14,5 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 | `post-compact-reminder.ts` | Remind after compaction events |
 | `protect-paths.ts` | Guard `.git` paths, block dangerous delete flows, and add macOS `move_to_trash` |
 | `session-id-status.ts` | Show session ID in status |
+| `spawn-worker.ts` | Tmux worker spawn + session-control orchestration |
 | `todos.ts` | Todo management extension |
