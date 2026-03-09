@@ -283,8 +283,7 @@ function renderBullet(
 	label: string,
 	detail?: string,
 ): string[] {
-	let line = `${theme.fg("syntaxComment", "//")} `;
-	line += `${theme.fg("dim", "•")} `;
+	let line = theme.fg("syntaxComment", "↳");
 	line += theme.fg("dim", label);
 	if (detail) {
 		line += theme.fg("syntaxComment", ` — ${detail}`);
@@ -296,7 +295,7 @@ function renderReplyLine(
 	theme: ThemeModule["theme"],
 	width: number,
 ): string[] {
-	return [truncateToWidth(theme.fg("syntaxComment", "// response"), width)];
+	return [truncateToWidth(theme.fg("syntaxComment", "response"), width)];
 }
 
 async function importInternal<T = unknown>(relativePath: string): Promise<T> {
