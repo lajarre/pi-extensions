@@ -39,6 +39,7 @@ ensureModuleStub(
 		"  Object: (properties) => ({ type: 'object', properties }),",
 		"  Optional: (schema) => ({ ...schema, optional: true }),",
 		"  String: () => ({ type: 'string' }),",
+		"  Array: (items, options = {}) => ({ type: 'array', items, ...options }),",
 		"};",
 	].join("\n"),
 );

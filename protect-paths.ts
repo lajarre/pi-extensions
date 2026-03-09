@@ -834,10 +834,6 @@ function hasPotentialShellExpansion(command: string): boolean {
     return /\$|`|\{[^}]*,[^}]*\}|\{[^}]*\.\.[^}]*\}|[?*\[]/.test(command);
 }
 
-function hasOpaqueRuntimeSubstitution(value: string): boolean {
-    return /\$\(|`[^`]*`/.test(value);
-}
-
 function isDynamicCommandNameToken(value: string): boolean {
     const trimmed = value.trim();
 
@@ -1080,18 +1076,6 @@ function extractProtectedDirRefsFromCommand(command: string, precomputed?: BashA
             for (const token of tokens) {
                 appendMatches(refs, token, GIT_REF_REGEX);
             }
-
-            if (
-                !isStandaloneLiteral
-                && [
-                    ...invocation.assignments,
-                    ...invocation.args,
-                    ...invocation.effectiveArgs,
-                    ...invocation.redirections.map((r) => r.target),
-                ].some(hasOpaqueRuntimeSubstitution)
-            ) {
-                refs.add(".git");
-            }
         }
 
         const needsFullScan = hasHereDocInvocation(analysis) || hasPotentialShellExpansion(command);
@@ -1106,7 +1090,7 @@ function extractProtectedDirRefsFromCommand(command: string, precomputed?: BashA
         // Fallback: keep regex behavior if parser fails
         appendMatches(refs, command, GIT_REF_REGEX);
         appendMatches(refs, command, GIT_SPLIT_REF_REGEX);
-        if (containsObfuscatedGitReference(command) || hasOpaqueRuntimeSubstitution(command)) {
+        if (containsObfuscatedGitReference(command)) {
             refs.add(".git");
         }
     }
