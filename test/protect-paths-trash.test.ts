@@ -177,6 +177,37 @@ describe("protect-paths manual Trash move guard", () => {
         assert.equal(result, null);
     });
 
+    it("move_to_trash successfully moves a file to Trash", { skip: !isDarwin }, async () => {
+        const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "protect-paths-trash-"));
+        const harness = createHarness(tempDir);
+        const tool = harness.getTool("move_to_trash");
+        assert.ok(tool, "move_to_trash should be registered on macOS");
+
+        const filename = "trash-success-test.txt";
+        const absolutePath = path.join(tempDir, filename);
+        await fsp.writeFile(absolutePath, "will be trashed");
+
+        const result = await tool.execute(
+            "tool-call-id",
+            { paths: [filename] },
+            undefined,
+            () => {
+                // no-op
+            },
+            harness.ctx,
+        );
+
+        assert.ok(result, "execute should return a result");
+        assert.ok(result.content?.length > 0, "result should have content");
+        assert.match(result.content[0].text, /Moved to Trash/, "result text should confirm move");
+
+        // File must no longer exist at original path
+        await assert.rejects(
+            fsp.access(absolutePath),
+            "file should no longer exist at original path after trash",
+        );
+    });
+
     it("move_to_trash fails closed when Finder call fails", { skip: !isDarwin }, async () => {
         const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "protect-paths-trash-"));
         const harness = createHarness(tempDir);
