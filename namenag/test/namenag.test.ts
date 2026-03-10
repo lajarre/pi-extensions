@@ -45,7 +45,6 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		notify(message: string, level: string) {
 			notifications.push({ message, level });
 		},
-		theme: { fg: (_style: string, text: string) => text },
 	};
 
 	/** Stub models with costs for cheapest-model resolution. */
@@ -110,6 +109,10 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		},
 		registerCommand(name: string, command: { description?: string; handler: (args: any, ctx: any) => Promise<void> }) {
 			commands.set(name, command);
+		},
+		registerTool(_tool: any) {},
+		async exec(_command: string, _args: string[], _opts?: any) {
+			return { stdout: "", stderr: "", code: 0 };
 		},
 		setSessionName(name: string) {
 			sessionName = name;
@@ -1443,4 +1446,5 @@ describe("namenag", () => {
 			);
 		});
 	});
+
 });
