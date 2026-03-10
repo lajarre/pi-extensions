@@ -45,7 +45,11 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		notify(message: string, level: string) {
 			notifications.push({ message, level });
 		},
-		theme: { fg: (_style: string, text: string) => text },
+		setWidget(_id: string, _content: any, _opts?: any) {},
+		theme: {
+			fg: (_style: string, text: string) => text,
+			borderColor: (text: string) => text,
+		},
 	};
 
 	/** Stub models with costs for cheapest-model resolution. */
