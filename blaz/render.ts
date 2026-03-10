@@ -92,6 +92,13 @@ export function injectLabelOnBorder(
 	return { prefix, label };
 }
 
+export function buildRightAlignedLine(text: string, width: number): string {
+	if (width <= 0) return "";
+	const truncated = truncatePlain(text, width, "");
+	const pad = Math.max(0, width - visibleWidth(truncated));
+	return " ".repeat(pad) + truncated;
+}
+
 export interface FooterStats {
 	input: number;
 	output: number;

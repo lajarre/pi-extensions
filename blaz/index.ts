@@ -1,52 +1,31 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import {
-	CustomEditor,
-	type ExtensionAPI,
-} from "@mariozechner/pi-coding-agent";
-import { attachEditorHook } from "./editor-hook.js";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	alignFooterLine,
 	buildFooterRight,
 	buildFooterStatsLeft,
 	buildPwdLine,
-	injectLabelOnBorder,
+	buildRightAlignedLine,
 	replaceHomePrefix,
 	truncatePlain,
 } from "./render.js";
 
 export default function blaz(pi: ExtensionAPI) {
-	function wrapEditor(editor: any) {
-		if (!editor || editor.__blazWrapped) return editor;
-		const render = editor.render.bind(editor);
-		editor.render = (width: number) => {
-			const lines = render(width);
-			const sessionName = pi.getSessionName();
-			if (!sessionName || lines.length === 0) return lines;
-			const { prefix, label } = injectLabelOnBorder(lines[0]!, sessionName, width);
-			const border = typeof editor.borderColor === "function"
-				? editor.borderColor(prefix)
-				: prefix;
-			lines[0] = border + label;
-			return lines;
-		};
-		editor.__blazWrapped = true;
-		return editor;
-	}
-
-	function installEditorHook(ctx: { hasUI: boolean; ui: any }) {
+	function installNameWidget(ctx: { hasUI: boolean; ui: any }) {
 		if (!ctx.hasUI) return;
-		attachEditorHook(
-			ctx.ui,
-			(factory: any) => {
-				return (tui: any, theme: any, kb: any) => wrapEditor(factory(tui, theme, kb));
+		ctx.ui.setWidget("blaz-name", (_tui: any, theme: any) => ({
+			render(width: number): string[] {
+				const name = pi.getSessionName() ?? "";
+				if (!name) return [" ".repeat(Math.max(0, width))];
+				return [theme.fg("accent", buildRightAlignedLine(name, width))];
 			},
-			(tui: any, theme: any, kb: any) => new CustomEditor(tui, theme, kb),
-		);
+			invalidate() {},
+		}));
 	}
 
 	function scheduleInstall(ctx: { hasUI: boolean; ui: any; sessionManager: any; modelRegistry: any; model: any; getContextUsage: () => any }) {
 		if (!ctx.hasUI) return;
-		installEditorHook(ctx);
+		installNameWidget(ctx);
 		setTimeout(() => {
 			installFooter(ctx);
 		}, 0);

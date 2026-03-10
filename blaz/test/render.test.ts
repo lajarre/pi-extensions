@@ -5,6 +5,7 @@ import {
 	buildFooterRight,
 	buildFooterStatsLeft,
 	buildPwdLine,
+	buildRightAlignedLine,
 	injectLabelOnBorder,
 	replaceHomePrefix,
 	stripAnsi,
@@ -48,6 +49,18 @@ describe("replaceHomePrefix", () => {
 describe("buildPwdLine", () => {
 	it("includes branch but not session name", () => {
 		assert.equal(buildPwdLine("~/workspace/aidev", "main"), "~/workspace/aidev (main)");
+	});
+});
+
+describe("buildRightAlignedLine", () => {
+	it("right aligns plain text", () => {
+		assert.equal(buildRightAlignedLine("name", 10), "      name");
+	});
+
+	it("handles wide text", () => {
+		const line = buildRightAlignedLine("界界", 8);
+		assert.equal(visibleWidth(line), 8);
+		assert.ok(line.endsWith("界界"));
 	});
 });
 
