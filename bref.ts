@@ -517,10 +517,7 @@ async function installPatches(): Promise<void> {
 function applyMode(ctx: ExtensionContext): void {
 	state.lastCtx = ctx;
 	ctx.ui.setToolsExpanded(getMode() === "detail");
-	ctx.ui.setStatus(
-		"bref",
-		ctx.ui.theme.fg("dim", `bref:${getMode()}`),
-	);
+	ctx.ui.setStatus("bref", undefined);
 }
 
 function cycleMode(ctx: ExtensionContext): void {
