@@ -2022,7 +2022,7 @@ async function moveToFinderTrash(
 ): Promise<void> {
     const script = [
         "on run argv",
-        "tell application \"Finder\" to delete POSIX file (item 1 of argv)",
+        "tell application \"Finder\" to delete (item 1 of argv as POSIX file)",
         "end run",
     ];
 
