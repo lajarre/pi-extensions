@@ -43,31 +43,6 @@ export default function namenag(pi: ExtensionAPI) {
 	let named = false;
 	let softNotified = false;
 	let generating = false;
-	let lastUi: any = null;
-
-	function updateNameWidget(
-		ctx?: { hasUI: boolean; ui: any },
-	) {
-		const ui = ctx?.ui ?? lastUi;
-		if (!ui) return;
-		if (ctx) lastUi = ctx.ui;
-		const name = pi.getSessionName();
-		if (name) {
-			ui.setWidget("namenag", (_tui: any, theme: any) => ({
-				render(width: number): string[] {
-					const label = ` ${name} `;
-					const pad = Math.max(0, width - label.length);
-					const line =
-						theme.fg("border", "─".repeat(pad)) +
-						theme.fg("accent", label);
-					return [line];
-				},
-				invalidate() {},
-			}));
-		} else {
-			ui.setWidget("namenag", undefined);
-		}
-	}
 
 	const piExec: ExecFn = async (command, args, options) => {
 		const result = await pi.exec(command, args, {
@@ -178,7 +153,6 @@ export default function namenag(pi: ExtensionAPI) {
 
 			pi.setSessionName(name);
 			markNamed();
-			updateNameWidget(ctx);
 			ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
 			return true;
 		} catch {
@@ -225,7 +199,6 @@ export default function namenag(pi: ExtensionAPI) {
 			if (name) {
 				pi.setSessionName(name);
 				markNamed();
-				updateNameWidget(ctx);
 				ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
 				return;
 			}
@@ -245,12 +218,11 @@ export default function namenag(pi: ExtensionAPI) {
 		ctx.ui.notify("Session unnamed — /name <name> to set one.", "info");
 	}
 
-	function resetState(ctx?: { hasUI: boolean; ui: any }) {
+	function resetState() {
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
 		named = !!pi.getSessionName();
-		updateNameWidget(ctx);
 	}
 
 	async function forceAutoName(ctx: any): Promise<void> {
@@ -260,7 +232,6 @@ export default function namenag(pi: ExtensionAPI) {
 			await autoName(ctx);
 		} finally {
 			if (!named) named = wasNamed;
-			updateNameWidget(ctx);
 		}
 	}
 
@@ -289,9 +260,9 @@ export default function namenag(pi: ExtensionAPI) {
 
 	// ── Event Listeners ─────────────────────────────────────────────────
 
-	pi.on("session_start", async (_event, ctx) => resetState(ctx));
-	pi.on("session_switch", async (_event, ctx) => resetState(ctx));
-	pi.on("session_fork", async (_event, ctx) => resetState(ctx));
+	pi.on("session_start", async () => resetState());
+	pi.on("session_switch", async () => resetState());
+	pi.on("session_fork", async () => resetState());
 
 	/** Hard trigger: compaction. */
 	pi.on("session_compact", async (_event, ctx) => {
