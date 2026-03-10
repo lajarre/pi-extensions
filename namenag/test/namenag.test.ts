@@ -39,16 +39,19 @@ type Handler = (event: any, ctx: any) => Promise<void>;
 function createMockPi(opts: { hasModel?: boolean } = {}) {
 	const handlers: Record<string, Handler[]> = {};
 	const notifications: Notification[] = [];
+	const widgets = new Map<string, any>();
 	let sessionName: string | undefined;
 
 	const ui = {
 		notify(message: string, level: string) {
 			notifications.push({ message, level });
 		},
-		setWidget(_id: string, _content: any, _opts?: any) {},
+		setWidget(id: string, content: any, _opts?: any) {
+			if (content === undefined) widgets.delete(id);
+			else widgets.set(id, content);
+		},
 		theme: {
 			fg: (_style: string, text: string) => text,
-			borderColor: (text: string) => text,
 		},
 	};
 
@@ -115,6 +118,10 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		registerCommand(name: string, command: { description?: string; handler: (args: any, ctx: any) => Promise<void> }) {
 			commands.set(name, command);
 		},
+		registerTool(_tool: any) {},
+		async exec(_command: string, _args: string[], _opts?: any) {
+			return { stdout: "", stderr: "", code: 0 };
+		},
 		setSessionName(name: string) {
 			sessionName = name;
 		},
@@ -130,6 +137,7 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		commands,
 		notifications,
 		getSessionName: () => sessionName,
+		getWidget: (id: string) => widgets.get(id),
 		setSessionName: (n: string | undefined) => {
 			sessionName = n;
 		},
@@ -174,6 +182,24 @@ function registerTestHandlers(
 
 	function isActive(ctx: { hasUI: boolean }) {
 		return ctx.hasUI && !named && !generating;
+	}
+
+	function updateNameWidget(ctx?: { hasUI: boolean; ui: any }) {
+		const ui = ctx?.ui;
+		if (!ui) return;
+		const name = api.getSessionName();
+		if (name) {
+			ui.setWidget("namenag", (_tui: any, theme: any) => ({
+				render(width: number): string[] {
+					const label = ` ${name} `;
+					const pad = Math.max(0, width - label.length);
+					return [theme.fg("border", "─".repeat(pad)) + theme.fg("accent", label)];
+				},
+				invalidate() {},
+			}));
+		} else {
+			ui.setWidget("namenag", undefined);
+		}
 	}
 
 	function markNamed() {
@@ -253,6 +279,7 @@ function registerTestHandlers(
 			if (structured) {
 				api.setSessionName(structured);
 				markNamed();
+				updateNameWidget(ctx);
 				ctx.ui.notify(`Auto-named: ${structured}. /name to change.`, "info");
 				return;
 			}
@@ -273,6 +300,7 @@ function registerTestHandlers(
 
 			api.setSessionName(fallback);
 			markNamed();
+			updateNameWidget(ctx);
 			ctx.ui.notify(`Auto-named: ${fallback}. /name to change.`, "info");
 		} catch {
 			softNotify(ctx);
@@ -288,6 +316,7 @@ function registerTestHandlers(
 			await autoName(ctx);
 		} finally {
 			if (!named) named = wasNamed;
+			updateNameWidget(ctx);
 		}
 	}
 
@@ -298,16 +327,17 @@ function registerTestHandlers(
 		},
 	});
 
-	function resetState() {
+	function resetState(ctx?: { hasUI: boolean; ui: any }) {
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
 		named = !!api.getSessionName();
+		updateNameWidget(ctx);
 	}
 
-	api.on("session_start", async () => resetState());
-	api.on("session_switch", async () => resetState());
-	api.on("session_fork", async () => resetState());
+	api.on("session_start", async (_event: any, ctx: any) => resetState(ctx));
+	api.on("session_switch", async (_event: any, ctx: any) => resetState(ctx));
+	api.on("session_fork", async (_event: any, ctx: any) => resetState(ctx));
 
 	api.on("session_compact", async (_event: any, ctx: any) => {
 		if (isActive(ctx)) await autoName(ctx);
@@ -1445,6 +1475,26 @@ describe("namenag", () => {
 				mock.notifications.some((n) => n.message.includes("Session unnamed")),
 				"Should soft-notify when no models",
 			);
+		});
+	});
+
+	describe("widget rendering", () => {
+		it("should render with supported theme methods only", async () => {
+			const mock = createMockPi();
+			mock.setSessionName("clear-session-name");
+			registerTestHandlers(mock.api);
+
+			await mock.fire("session_start");
+
+			const widgetFactory = mock.getWidget("namenag");
+			assert.ok(widgetFactory, "Widget should be registered when session is named");
+
+			const component = widgetFactory({}, {
+				fg: (_style: string, text: string) => text,
+			});
+			const lines = component.render(24);
+			assert.equal(lines.length, 1);
+			assert.match(lines[0], /clear-session-name/);
 		});
 	});
 });

@@ -58,7 +58,7 @@ export default function namenag(pi: ExtensionAPI) {
 					const label = ` ${name} `;
 					const pad = Math.max(0, width - label.length);
 					const line =
-						theme.borderColor("─".repeat(pad)) +
+						theme.fg("border", "─".repeat(pad)) +
 						theme.fg("accent", label);
 					return [line];
 				},
