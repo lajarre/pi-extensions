@@ -1,10 +1,10 @@
 /**
- * namenag extension — unit tests.
+ * nym extension — unit tests.
  *
  * Tests the core logic by simulating the Pi extension lifecycle
  * (session_start, turn_end, session_compact) with a minimal mock harness.
  *
- * Run:  npx tsx --test test/namenag.test.ts
+ * Run:  npx tsx --test test/nym.test.ts
  */
 
 import assert from "node:assert/strict";
@@ -201,7 +201,7 @@ function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 // ─── Test harness: register handlers that mirror the extension ───────────────
 
 /**
- * Registers event handlers that mirror namenag.ts logic but with injectable
+ * Registers event handlers that mirror nym.ts logic but with injectable
  * LLM behavior. This lets us test the full event flow without ESM mocking.
  */
 function registerTestHandlers(
@@ -657,12 +657,12 @@ describe("resolveProject", () => {
 	it("should extract short repo name without truncation", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "https://github.com/org/namenag.git\n", stderr: "", exitCode: 0 };
+				return { stdout: "https://github.com/org/nym.git\n", stderr: "", exitCode: 0 };
 			}
 			return { stdout: "", stderr: "", exitCode: 1 };
 		};
 		const result = await resolveProject("/some/repo", exec);
-		assert.equal(result, "namenag");
+		assert.equal(result, "nym");
 	});
 
 	it("should fall back to cwd basename when no git remote", async () => {
@@ -1226,7 +1226,7 @@ describe("segment edge cases", () => {
 	});
 });
 
-describe("namenag", () => {
+describe("nym", () => {
 	describe("state initialization", () => {
 		it("should not nag if session already has a name on start", async () => {
 			const mock = createMockPi();

@@ -1,5 +1,5 @@
 /**
- * namenag — Auto-name unnamed Pi sessions before they get lost in /resume.
+ * nym — Auto-name unnamed Pi sessions before they get lost in /resume.
  *
  * Triggers:
  *   Hard (auto-names via LLM):
@@ -51,7 +51,7 @@ type ResolvedModel = {
 	apiKey: string;
 };
 
-export default function namenag(pi: ExtensionAPI) {
+export default function nym(pi: ExtensionAPI) {
 	let turnCount = 0;
 	let softNotified = false;
 	let generating = false;

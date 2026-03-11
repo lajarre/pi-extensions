@@ -1,4 +1,4 @@
-# namenag
+# nym
 
 Auto-name Pi sessions with structured, hierarchical names.
 Also adds `/nym` for smart naming and completion.
@@ -68,11 +68,11 @@ fails), falls back to old-style 2–4 word kebab-case LLM naming.
 Symlink into your extensions directory:
 
 ```bash
-ln -s /path/to/pi-extensions/namenag ~/.pi/agent/extensions/namenag
+ln -s /path/to/pi-extensions/nym ~/.pi/agent/extensions/nym
 ```
 
 ## test
 
 ```bash
-cd pi-extensions/namenag && npx tsx --test test/namenag.test.ts
+cd pi-extensions/nym && npx tsx --test test/nym.test.ts
 ```

@@ -7,7 +7,7 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 | Name | Description |
 |------|-------------|
 | `vim-bindings/` | Vim-like modal editing with system clipboard integration |
-| `namenag/` | Auto-name unnamed sessions before they get lost in `/resume` |
+| `nym/` | Auto-name unnamed sessions before they get lost in `/resume` |
 | `bref.ts` | Three-level `ctrl+o` plus `/bref` mode command |
 | `compaction-model.ts` | Use a cheaper model for context compaction |
 | `fork-rename.ts` | Auto-rename forked sessions |
