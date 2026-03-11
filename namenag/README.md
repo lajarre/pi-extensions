@@ -1,10 +1,11 @@
 # namenag
 
-Auto-name unnamed Pi sessions with structured, hierarchical names.
+Auto-name Pi sessions with structured, hierarchical names.
+Also upgrades `/name` with smart completion.
 
-## How It Works
+## how it works
 
-### Structured Naming Pipeline
+### structured naming pipeline
 
 Names are built from segments ordered by decreasing scope:
 
@@ -28,28 +29,41 @@ project : worktree : branch : pr : subfolder : description
 - `system:debug-worker-cache`
 - `butter-docs:shaping-api`
 
-### Triggers
+### `/name` behavior
+
+This extension overrides Pi's built-in `/name` command:
+
+- `/name` — force re-derive the session name
+- `/name <name>` — set the session name explicitly
+- `/name <tab>` — completes with:
+  - the current session name, if one exists
+  - otherwise a suggested structured name
+
+The suggestion cache is refreshed from session context, so tab-complete
+usually fills a fresh structured name without executing the command.
+
+### triggers
 
 | Trigger | Threshold | Action |
 |---------|-----------|--------|
-| **Soft** | ≥10 user turns | Toast: "Session unnamed — `/name` to set one." |
+| **Soft** | ≥10 user turns | Toast: "Session unnamed — `/name` to auto-name." |
 | **Hard** | ≥50 user turns | Structured name pipeline → `setSessionName()` |
 | **Hard** | Compaction | Structured name pipeline → `setSessionName()` |
-| **Command** | `/name-auto` | Force re-derive (works even if already named) |
+| **Command** | `/name` | Force re-derive (works even if already named) |
 
-### Fallback
+### fallback
 
 If the structured pipeline produces an empty name (all resolvers fail AND LLM
 fails), falls back to old-style 2–4 word kebab-case LLM naming.
 
-### Safety
+### safety
 
 - Guards `ctx.hasUI` — silent in detached sessions and sub-agents
-- `/name-auto` ignores `named` flag; auto-triggers respect it
+- `/name` ignores existing name; auto-triggers respect it
 - All git/gh calls fail silently with graceful degradation
 - `gh` calls use 3s timeout — no blocking
 
-## Install
+## install
 
 Symlink into your extensions directory:
 
@@ -57,7 +71,7 @@ Symlink into your extensions directory:
 ln -s /path/to/pi-extensions/namenag ~/.pi/agent/extensions/namenag
 ```
 
-## Test
+## test
 
 ```bash
 cd pi-extensions/namenag && npx tsx --test test/namenag.test.ts

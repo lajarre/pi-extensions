@@ -9,16 +9,24 @@
  *     - ≥10 user turns — toast reminder
  *
  * Uses the cheapest available model (by input token cost) to generate a
- * 2–4 word kebab-case session name from early conversation context.
+ * structured session name from early conversation context.
  * Falls back to ctx.model if no cheaper alternative is found.
  *
- * Guards: ctx.hasUI (skip in detached/sub-agent sessions), named flag.
+ * Also overrides /name:
+ *   - /name          → force re-derive the session name
+ *   - /name <name>   → set the session name explicitly
+ *   - /name <Tab>    → complete with current or suggested name
+ *
+ * Guards: ctx.hasUI (skip in detached/sub-agent sessions).
  *
  * Zero configuration required.
  */
 
 import { complete, type Message } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, SessionEntry } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	SessionEntry,
+} from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
 	DESCRIPTION_PROMPT,
@@ -38,11 +46,17 @@ Rules:
 - Be specific, not generic (not "coding-session" or "chat")
 - Output ONLY the name, nothing else — no quotes, no explanation`;
 
+type ResolvedModel = {
+	model: any;
+	apiKey: string;
+};
+
 export default function namenag(pi: ExtensionAPI) {
 	let turnCount = 0;
-	let named = false;
 	let softNotified = false;
 	let generating = false;
+	let suggestedName: string | null = pi.getSessionName() ?? null;
+	let suggestionVersion = 0;
 
 	const piExec: ExecFn = async (command, args, options) => {
 		const result = await pi.exec(command, args, {
@@ -58,13 +72,47 @@ export default function namenag(pi: ExtensionAPI) {
 
 	// ── Helpers ──────────────────────────────────────────────────────────
 
-	function isActive(ctx: { hasUI: boolean }): boolean {
-		return ctx.hasUI && !named && !generating;
+	function isActive(
+		ctx: { hasUI: boolean },
+		options: { ignoreExistingName?: boolean } = {},
+	): boolean {
+		return (
+			ctx.hasUI &&
+			(options.ignoreExistingName || !pi.getSessionName()) &&
+			!generating
+		);
 	}
 
-	function markNamed() {
-		named = true;
-		softNotified = true; // no more nags of any kind
+	function markNamed(name: string) {
+		softNotified = true;
+		suggestedName = name;
+		suggestionVersion++;
+	}
+
+	function sanitizeGeneratedName(raw: string): string {
+		return raw
+			.toLowerCase()
+			.replace(/[^a-z0-9-\s]/g, "")
+			.replace(/\s+/g, "-")
+			.replace(/-+/g, "-")
+			.replace(/^-|-$/g, "")
+			.slice(0, 60);
+	}
+
+	function applyName(
+		ctx: { ui: { notify(message: string, type?: "info"): void } },
+		name: string,
+		mode: "auto" | "manual",
+	): void {
+		pi.setSessionName(name);
+		markNamed(name);
+
+		if (mode === "manual") {
+			ctx.ui?.notify?.(`Session named: ${name}`, "info");
+			return;
+		}
+
+		ctx.ui?.notify?.(`Auto-named: ${name}. /name <name> to change.`, "info");
 	}
 
 	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
@@ -74,9 +122,15 @@ export default function namenag(pi: ExtensionAPI) {
 		const MAX_MESSAGES = 3;
 		const userMessages: string[] = [];
 
-		for (let i = entries.length - 1; i >= 0 && userMessages.length < MAX_MESSAGES; i--) {
+		for (
+			let i = entries.length - 1;
+			i >= 0 && userMessages.length < MAX_MESSAGES;
+			i--
+		) {
 			const e = entries[i];
-			if (e.type !== "message" || (e as any).message?.role !== "user") continue;
+			if (e.type !== "message" || (e as any).message?.role !== "user") {
+				continue;
+			}
 
 			const content = (e as any).message.content;
 			let text = "";
@@ -84,29 +138,32 @@ export default function namenag(pi: ExtensionAPI) {
 				text = content;
 			} else if (Array.isArray(content)) {
 				for (const block of content) {
-					if (block.type === "text" && block.text) text += block.text + "\n";
+					if (block.type === "text" && block.text) {
+						text += `${block.text}\n`;
+					}
 				}
 			}
 
-			if (text.trim()) userMessages.push(text.trim());
+			if (text.trim()) {
+				userMessages.push(text.trim());
+			}
 		}
 
 		return userMessages.join("\n").slice(0, MAX_CHARS).trim();
 	}
 
-	/** Pick the cheapest available model with a valid API key, or fall back to ctx.model. */
+	/** Pick the cheapest available model with a valid API key. */
 	async function resolveModel(ctx: { modelRegistry: any; model: any }) {
 		const available = ctx.modelRegistry.getAvailable();
 		if (!Array.isArray(available) || available.length === 0) {
-			// No models at all — use session model as last resort
 			if (!ctx.model) return null;
 			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
 			return apiKey ? { model: ctx.model, apiKey } : null;
 		}
 
-		// Sort by input cost ascending, pick the first one with a key
 		const sorted = [...available].sort(
-			(a: any, b: any) => (a.cost?.input ?? Infinity) - (b.cost?.input ?? Infinity),
+			(a: any, b: any) =>
+				(a.cost?.input ?? Infinity) - (b.cost?.input ?? Infinity),
 		);
 
 		for (const candidate of sorted) {
@@ -117,52 +174,99 @@ export default function namenag(pi: ExtensionAPI) {
 		return null;
 	}
 
-	async function fallbackName(
-		ctx: any,
+	async function generateWithPrompt(
+		prompt: string,
 		context: string,
-		resolved: { model: any; apiKey: string },
-	): Promise<boolean> {
+		resolved: ResolvedModel,
+	): Promise<string> {
+		const userMessage: Message = {
+			role: "user",
+			content: [
+				{ type: "text", text: `<conversation>\n${context}\n</conversation>` },
+			],
+			timestamp: Date.now(),
+		};
+
+		const response = await complete(
+			resolved.model,
+			{ systemPrompt: prompt, messages: [userMessage] },
+			{ apiKey: resolved.apiKey, maxTokens: 64 },
+		);
+
+		return response.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join("")
+			.trim();
+	}
+
+	async function generateFallbackName(
+		context: string,
+		resolved: ResolvedModel,
+	): Promise<string | null> {
 		try {
-			const userMessage: Message = {
-				role: "user",
-				content: [{ type: "text", text: `<conversation>\n${context}\n</conversation>` }],
-				timestamp: Date.now(),
-			};
-
-			const response = await complete(
-				resolved.model,
-				{ systemPrompt: FALLBACK_NAME_PROMPT, messages: [userMessage] },
-				{ apiKey: resolved.apiKey, maxTokens: 64 },
+			const raw = await generateWithPrompt(
+				FALLBACK_NAME_PROMPT,
+				context,
+				resolved,
 			);
-
-			const raw = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("")
-				.trim();
-
-			const name = raw
-				.toLowerCase()
-				.replace(/[^a-z0-9-\s]/g, "")
-				.replace(/\s+/g, "-")
-				.replace(/-+/g, "-")
-				.replace(/^-|-$/g, "")
-				.slice(0, 60);
-
-			if (!name) return false;
-
-			pi.setSessionName(name);
-			markNamed();
-			ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
-			return true;
+			const name = sanitizeGeneratedName(raw);
+			return name || null;
 		} catch {
-			return false;
+			return null;
+		}
+	}
+
+	async function deriveStructuredSuggestion(
+		ctx: any,
+		options: { allowEmptyContext?: boolean } = {},
+	): Promise<string | null> {
+		const context = gatherContext(ctx);
+		if (!context && !options.allowEmptyContext) return null;
+
+		let resolved: ResolvedModel | null = null;
+		if (context) {
+			resolved = await resolveModel(ctx);
+		}
+
+		const llmCallback: DescriptionLLMFn = async (contextText: string) => {
+			if (!resolved) return "";
+			return generateWithPrompt(DESCRIPTION_PROMPT, contextText, resolved);
+		};
+
+		return structuredName(ctx.cwd, piExec, context, llmCallback);
+	}
+
+	async function updateSuggestedName(ctx: any): Promise<void> {
+		const version = ++suggestionVersion;
+
+		try {
+			const current = pi.getSessionName()?.trim();
+			if (current) {
+				if (version === suggestionVersion) suggestedName = current;
+				return;
+			}
+
+			const suggestion = await deriveStructuredSuggestion(ctx, {
+				allowEmptyContext: true,
+			});
+
+			if (version === suggestionVersion) {
+				suggestedName = suggestion;
+			}
+		} catch {
+			if (version === suggestionVersion) {
+				suggestedName = null;
+			}
 		}
 	}
 
 	/** Generate a structured session name and apply fallback when needed. */
-	async function autoName(ctx: any): Promise<void> {
-		if (!isActive(ctx)) return;
+	async function autoName(
+		ctx: any,
+		options: { ignoreExistingName?: boolean } = {},
+	): Promise<void> {
+		if (!isActive(ctx, options)) return;
 
 		const context = gatherContext(ctx);
 		if (!context) return;
@@ -176,35 +280,26 @@ export default function namenag(pi: ExtensionAPI) {
 		generating = true;
 		try {
 			const llmCallback: DescriptionLLMFn = async (contextText: string) => {
-				const userMessage: Message = {
-					role: "user",
-					content: [{ type: "text", text: `<conversation>\n${contextText}\n</conversation>` }],
-					timestamp: Date.now(),
-				};
-
-				const response = await complete(
-					resolved.model,
-					{ systemPrompt: DESCRIPTION_PROMPT, messages: [userMessage] },
-					{ apiKey: resolved.apiKey, maxTokens: 64 },
+				return generateWithPrompt(
+					DESCRIPTION_PROMPT,
+					contextText,
+					resolved,
 				);
-
-				return response.content
-					.filter((c): c is { type: "text"; text: string } => c.type === "text")
-					.map((c) => c.text)
-					.join("")
-					.trim();
 			};
 
 			const name = await structuredName(ctx.cwd, piExec, context, llmCallback);
 			if (name) {
-				pi.setSessionName(name);
-				markNamed();
-				ctx.ui.notify(`Auto-named: ${name}. /name to change.`, "info");
+				applyName(ctx, name, "auto");
 				return;
 			}
 
-			const didFallback = await fallbackName(ctx, context, resolved);
-			if (!didFallback) softNotify(ctx);
+			const fallback = await generateFallbackName(context, resolved);
+			if (fallback) {
+				applyName(ctx, fallback, "auto");
+				return;
+			}
+
+			softNotify(ctx);
 		} catch {
 			softNotify(ctx);
 		} finally {
@@ -213,31 +308,58 @@ export default function namenag(pi: ExtensionAPI) {
 	}
 
 	function softNotify(ctx: { hasUI: boolean; ui: any }): void {
-		if (!ctx.hasUI || named || softNotified) return;
+		if (!ctx.hasUI || pi.getSessionName() || softNotified) return;
 		softNotified = true;
-		ctx.ui.notify("Session unnamed — /name <name> to set one.", "info");
+		ctx.ui?.notify?.(
+			"Session unnamed — /name to auto-name, /name <name> to set one.",
+			"info",
+		);
 	}
 
-	function resetState() {
+	function resetState(ctx?: any) {
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
-		named = !!pi.getSessionName();
-	}
-
-	async function forceAutoName(ctx: any): Promise<void> {
-		const wasNamed = named;
-		named = false;
-		try {
-			await autoName(ctx);
-		} finally {
-			if (!named) named = wasNamed;
+		suggestedName = pi.getSessionName() ?? null;
+		suggestionVersion++;
+		if (ctx?.hasUI) {
+			void updateSuggestedName(ctx);
 		}
 	}
 
-	pi.registerCommand("name-auto", {
-		description: "Re-derive session name from environment + activity",
-		handler: async (_args, ctx) => {
+	async function forceAutoName(ctx: any): Promise<void> {
+		await autoName(ctx, { ignoreExistingName: true });
+		if (!pi.getSessionName()) {
+			await updateSuggestedName(ctx);
+		}
+	}
+
+	pi.registerCommand("name", {
+		description: "Auto-name session or set it explicitly (usage: /name [new name])",
+		getArgumentCompletions: (argumentPrefix) => {
+			const current = pi.getSessionName()?.trim();
+			const value = current || suggestedName?.trim();
+			if (!value) return null;
+			if (argumentPrefix && !value.startsWith(argumentPrefix)) return null;
+
+			return [
+				{
+					value,
+					label: value,
+					description: current
+						? "current session name"
+						: "suggested session name",
+				},
+			];
+		},
+		handler: async (args, ctx) => {
+			const name = args.trim();
+
+			if (name) {
+				applyName(ctx, name, "manual");
+				return;
+			}
+
 			await forceAutoName(ctx);
 		},
 	});
@@ -253,16 +375,23 @@ export default function namenag(pi: ExtensionAPI) {
 			await forceAutoName(ctx);
 			const name = pi.getSessionName();
 			return {
-				content: [{ type: "text", text: name ? `Session named: ${name}` : "Failed to derive name" }],
+				content: [
+					{
+						type: "text",
+						text: name
+							? `Session named: ${name}`
+							: "Failed to derive name",
+					},
+				],
 			};
 		},
 	});
 
 	// ── Event Listeners ─────────────────────────────────────────────────
 
-	pi.on("session_start", async () => resetState());
-	pi.on("session_switch", async () => resetState());
-	pi.on("session_fork", async () => resetState());
+	pi.on("session_start", async (_event, ctx) => resetState(ctx));
+	pi.on("session_switch", async (_event, ctx) => resetState(ctx));
+	pi.on("session_fork", async (_event, ctx) => resetState(ctx));
 
 	/** Hard trigger: compaction. */
 	pi.on("session_compact", async (_event, ctx) => {
@@ -275,8 +404,12 @@ export default function namenag(pi: ExtensionAPI) {
 
 		if (turnCount >= HARD_THRESHOLD && isActive(ctx)) {
 			await autoName(ctx);
-		} else if (turnCount >= SOFT_THRESHOLD && !softNotified && !named && ctx.hasUI) {
+		} else if (turnCount >= SOFT_THRESHOLD && !softNotified && !pi.getSessionName() && ctx.hasUI) {
 			softNotify(ctx);
+		}
+
+		if (!pi.getSessionName() && ctx.hasUI) {
+			void updateSuggestedName(ctx);
 		}
 	});
 }

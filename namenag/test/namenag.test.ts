@@ -100,14 +100,28 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		model: opts.hasModel === false ? undefined : expensiveModel,
 	};
 
-	const commands = new Map<string, { description?: string; handler: (args: any, ctx: any) => Promise<void> }>();
+	const commands = new Map<
+		string,
+		{
+			description?: string;
+			getArgumentCompletions?: (prefix: string) => any[] | null;
+			handler: (args: any, ctx: any) => Promise<void>;
+		}
+	>();
 
 	const api: any = {
 		on(event: string, handler: Handler) {
 			if (!handlers[event]) handlers[event] = [];
 			handlers[event].push(handler);
 		},
-		registerCommand(name: string, command: { description?: string; handler: (args: any, ctx: any) => Promise<void> }) {
+		registerCommand(
+			name: string,
+			command: {
+				description?: string;
+				getArgumentCompletions?: (prefix: string) => any[] | null;
+				handler: (args: any, ctx: any) => Promise<void>;
+			},
+		) {
 			commands.set(name, command);
 		},
 		registerTool(_tool: any) {},
@@ -142,6 +156,11 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 			if (!command) throw new Error(`Command not found: ${name}`);
 			await command.handler(args, ctx);
 		},
+		getCommandCompletions(name: string, prefix = "") {
+			const command = commands.get(name);
+			if (!command?.getArgumentCompletions) return null;
+			return command.getArgumentCompletions(prefix);
+		},
 	};
 }
 
@@ -160,6 +179,7 @@ function registerTestHandlers(
 		captureContext?: (context: string) => void;
 		structuredResult?: string;
 		fallbackResult?: string;
+		suggestedResult?: string;
 	} = {},
 ) {
 	const SOFT = 10;
@@ -167,23 +187,33 @@ function registerTestHandlers(
 	const hasModel = opts.hasModel ?? true;
 
 	let turnCount = 0;
-	let named = false;
 	let softNotified = false;
 	let generating = false;
+	let suggestedName: string | null = api.getSessionName() ?? null;
 
-	function isActive(ctx: { hasUI: boolean }) {
-		return ctx.hasUI && !named && !generating;
+	function isActive(
+		ctx: { hasUI: boolean },
+		options: { ignoreExistingName?: boolean } = {},
+	) {
+		return (
+			ctx.hasUI &&
+			(options.ignoreExistingName || !api.getSessionName()) &&
+			!generating
+		);
 	}
 
-	function markNamed() {
-		named = true;
+	function markNamed(name: string) {
 		softNotified = true;
+		suggestedName = name;
 	}
 
 	function softNotify(ctx: { hasUI: boolean; ui: any }) {
-		if (!ctx.hasUI || named || softNotified) return;
+		if (!ctx.hasUI || api.getSessionName() || softNotified) return;
 		softNotified = true;
-		ctx.ui.notify("Session unnamed — /name <name> to set one.", "info");
+		ctx.ui.notify(
+			"Session unnamed — /name to auto-name, /name <name> to set one.",
+			"info",
+		);
 	}
 
 	function gatherContext(ctx: { sessionManager: { getBranch(): any[] } }): string {
@@ -192,7 +222,11 @@ function registerTestHandlers(
 		const MAX_MESSAGES = 3;
 		const userMessages: string[] = [];
 
-		for (let i = entries.length - 1; i >= 0 && userMessages.length < MAX_MESSAGES; i--) {
+		for (
+			let i = entries.length - 1;
+			i >= 0 && userMessages.length < MAX_MESSAGES;
+			i--
+		) {
 			const e = entries[i];
 			if (e.type !== "message" || e.message?.role !== "user") continue;
 
@@ -230,8 +264,40 @@ function registerTestHandlers(
 		return null;
 	}
 
-	async function autoName(ctx: any): Promise<void> {
-		if (!isActive(ctx)) return;
+	function sanitizeGeneratedName(value: string): string {
+		return value
+			.toLowerCase()
+			.replace(/[^a-z0-9-\s]/g, "")
+			.replace(/\s+/g, "-")
+			.replace(/-+/g, "-")
+			.replace(/^-|-$/g, "")
+			.slice(0, 60);
+	}
+
+	function computeSuggestedName(ctx: any) {
+		const current = api.getSessionName()?.trim();
+		if (current) {
+			suggestedName = current;
+			return;
+		}
+
+		const context = gatherContext(ctx);
+		opts.captureContext?.(context);
+
+		const raw =
+			opts.suggestedResult ??
+			opts.structuredResult ??
+			opts.autoNameResult ??
+			"test-session-name";
+		const trimmed = raw.trim().slice(0, 60);
+		suggestedName = trimmed || null;
+	}
+
+	async function autoName(
+		ctx: any,
+		options: { ignoreExistingName?: boolean } = {},
+	): Promise<void> {
+		if (!isActive(ctx, options)) return;
 
 		const context = gatherContext(ctx);
 		opts.captureContext?.(context);
@@ -247,32 +313,31 @@ function registerTestHandlers(
 		try {
 			if (opts.autoNameFails) throw new Error("LLM failed");
 
-			const structuredRaw = opts.structuredResult ?? opts.autoNameResult ?? "test-session-name";
+			const structuredRaw =
+				opts.structuredResult ?? opts.autoNameResult ?? "test-session-name";
 			const structured = structuredRaw.trim().slice(0, 60);
 			if (structured) {
 				api.setSessionName(structured);
-				markNamed();
-				ctx.ui.notify(`Auto-named: ${structured}. /name to change.`, "info");
+				markNamed(structured);
+				ctx.ui.notify(
+					`Auto-named: ${structured}. /name <name> to change.`,
+					"info",
+				);
 				return;
 			}
 
-			const fallbackRaw = opts.fallbackResult ?? "";
-			const fallback = fallbackRaw
-				.toLowerCase()
-				.replace(/[^a-z0-9-\s]/g, "")
-				.replace(/\s+/g, "-")
-				.replace(/-+/g, "-")
-				.replace(/^-|-$/g, "")
-				.slice(0, 60);
-
+			const fallback = sanitizeGeneratedName(opts.fallbackResult ?? "");
 			if (!fallback) {
 				softNotify(ctx);
 				return;
 			}
 
 			api.setSessionName(fallback);
-			markNamed();
-			ctx.ui.notify(`Auto-named: ${fallback}. /name to change.`, "info");
+			markNamed(fallback);
+			ctx.ui.notify(
+				`Auto-named: ${fallback}. /name <name> to change.`,
+				"info",
+			);
 		} catch {
 			softNotify(ctx);
 		} finally {
@@ -281,32 +346,52 @@ function registerTestHandlers(
 	}
 
 	async function forceAutoName(ctx: any): Promise<void> {
-		const wasNamed = named;
-		named = false;
-		try {
-			await autoName(ctx);
-		} finally {
-			if (!named) named = wasNamed;
-		}
+		await autoName(ctx, { ignoreExistingName: true });
+		if (!api.getSessionName()) computeSuggestedName(ctx);
 	}
 
-	api.registerCommand("name-auto", {
-		description: "Re-derive session name from environment + activity",
-		handler: async (_args: any, ctx: any) => {
+	api.registerCommand("name", {
+		description: "Auto-name session or set it explicitly (usage: /name [new name])",
+		getArgumentCompletions: (prefix: string) => {
+			const current = api.getSessionName()?.trim();
+			const value = current || suggestedName?.trim();
+			if (!value) return null;
+			if (prefix && !value.startsWith(prefix)) return null;
+
+			return [
+				{
+					value,
+					label: value,
+					description: current
+						? "current session name"
+						: "suggested session name",
+				},
+			];
+		},
+		handler: async (args: any, ctx: any) => {
+			const name = args.trim();
+			if (name) {
+				api.setSessionName(name);
+				markNamed(name);
+				ctx.ui.notify(`Session named: ${name}`, "info");
+				return;
+			}
+
 			await forceAutoName(ctx);
 		},
 	});
 
-	function resetState() {
+	function resetState(ctx?: any) {
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
-		named = !!api.getSessionName();
+		suggestedName = api.getSessionName() ?? null;
+		if (ctx?.hasUI) computeSuggestedName(ctx);
 	}
 
-	api.on("session_start", async () => resetState());
-	api.on("session_switch", async () => resetState());
-	api.on("session_fork", async () => resetState());
+	api.on("session_start", async (_event: any, ctx: any) => resetState(ctx));
+	api.on("session_switch", async (_event: any, ctx: any) => resetState(ctx));
+	api.on("session_fork", async (_event: any, ctx: any) => resetState(ctx));
 
 	api.on("session_compact", async (_event: any, ctx: any) => {
 		if (isActive(ctx)) await autoName(ctx);
@@ -316,12 +401,22 @@ function registerTestHandlers(
 		turnCount++;
 		if (turnCount >= HARD && isActive(ctx)) {
 			await autoName(ctx);
-		} else if (turnCount >= SOFT && !softNotified && !named && ctx.hasUI) {
+		} else if (
+			turnCount >= SOFT &&
+			!softNotified &&
+			!api.getSessionName() &&
+			ctx.hasUI
+		) {
 			softNotify(ctx);
 		}
+
+		if (!api.getSessionName() && ctx.hasUI) computeSuggestedName(ctx);
 	});
 
-	return { getTurnCount: () => turnCount, isNamed: () => named };
+	return {
+		getTurnCount: () => turnCount,
+		getSuggestedName: () => suggestedName,
+	};
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1004,7 +1099,7 @@ describe("fallback behavior", () => {
 	});
 });
 
-describe("/name-auto vs auto-triggers", () => {
+describe("/name vs auto-triggers", () => {
 	it("auto-trigger (compaction) should NOT overwrite existing name", async () => {
 		const mock = createMockPi();
 		mock.setSessionName("existing-name");
@@ -1016,13 +1111,13 @@ describe("/name-auto vs auto-triggers", () => {
 		assert.equal(mock.getSessionName(), "existing-name");
 	});
 
-	it("/name-auto SHOULD overwrite existing name", async () => {
+	it("/name with no args SHOULD overwrite existing name", async () => {
 		const mock = createMockPi();
 		mock.setSessionName("existing-name");
 		registerTestHandlers(mock.api, { structuredResult: "forced-new-name" });
 		await mock.fire("session_start");
 
-		await mock.runCommand("name-auto", {});
+		await mock.runCommand("name", "");
 
 		assert.equal(mock.getSessionName(), "forced-new-name");
 	});
@@ -1223,12 +1318,13 @@ describe("namenag", () => {
 		});
 	});
 
-	describe("/name-auto command", () => {
-		it("should register the name-auto command", () => {
+	describe("/name command", () => {
+		it("should register the name command", () => {
 			const mock = createMockPi();
 			registerTestHandlers(mock.api);
 
-			assert.ok(mock.commands.has("name-auto"));
+			assert.ok(mock.commands.has("name"));
+			assert.ok(!mock.commands.has("name-auto"));
 		});
 
 		it("should rename even when session is already named", async () => {
@@ -1240,8 +1336,60 @@ describe("namenag", () => {
 			await mock.fire("session_compact");
 			assert.equal(mock.getSessionName(), "existing-name");
 
-			await mock.runCommand("name-auto", {});
+			await mock.runCommand("name", "");
 			assert.equal(mock.getSessionName(), "forced-rename");
+		});
+
+		it("should set explicit names without auto-generation", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, { structuredResult: "ignored-auto-name" });
+			await mock.fire("session_start");
+
+			await mock.runCommand("name", "manual-name");
+
+			assert.equal(mock.getSessionName(), "manual-name");
+			assert.ok(
+				mock.notifications.some((n) => n.message.includes("Session named: manual-name")),
+			);
+		});
+
+		it("should complete with the current session name", async () => {
+			const mock = createMockPi();
+			mock.setSessionName("existing-name");
+			registerTestHandlers(mock.api);
+			await mock.fire("session_start");
+
+			const completions = mock.getCommandCompletions("name", "");
+			assert.deepEqual(completions, [
+				{
+					value: "existing-name",
+					label: "existing-name",
+					description: "current session name",
+				},
+			]);
+		});
+
+		it("should complete with a suggested name when unnamed", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, { suggestedResult: "project:branch:suggested" });
+			await mock.fire("session_start");
+
+			const completions = mock.getCommandCompletions("name", "");
+			assert.deepEqual(completions, [
+				{
+					value: "project:branch:suggested",
+					label: "project:branch:suggested",
+					description: "suggested session name",
+				},
+			]);
+		});
+
+		it("should filter completions by prefix", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, { suggestedResult: "project:branch:suggested" });
+			await mock.fire("session_start");
+
+			assert.equal(mock.getCommandCompletions("name", "zzz"), null);
 		});
 	});
 
