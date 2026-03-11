@@ -12,10 +12,10 @@
  * structured session name from early conversation context.
  * Falls back to ctx.model if no cheaper alternative is found.
  *
- * Also upgrades the built-in /name command via terminal interception:
- *   - /name          → force re-derive the session name
- *   - /name <name>   → built-in explicit set still works
- *   - /name <Tab>    → fill with current or suggested name
+ * Also adds /nym:
+ *   - /nym          → force re-derive the session name
+ *   - /nym <name>   → set the session name explicitly
+ *   - /nym <Tab>    → complete with current or suggested name
  *
  * Guards: ctx.hasUI (skip in detached/sub-agent sessions).
  *
@@ -113,26 +113,10 @@ export default function namenag(pi: ExtensionAPI) {
 			return;
 		}
 
-		ctx.ui?.notify?.(`Auto-named: ${name}. /name <name> to change.`, "info");
-	}
-
-	function isBlankNameEditorText(text: string): boolean {
-		return text.trim() === "/name";
-	}
-
-	function fillNameEditor(
-		ctx: {
-			ui: {
-				setEditorText(text: string): void;
-				pasteToEditor(text: string): void;
-				setStatus(key: string, text: string | undefined): void;
-			};
-		},
-		name: string,
-	) {
-		ctx.ui.setEditorText("");
-		ctx.ui.pasteToEditor(`/name ${name}`);
-		ctx.ui.setStatus("namenag-fill", undefined);
+		ctx.ui?.notify?.(
+			`Auto-named: ${name}. /nym to re-derive, /name <name> to change.`,
+			"info",
+		);
 	}
 
 	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
@@ -331,16 +315,23 @@ export default function namenag(pi: ExtensionAPI) {
 		if (!ctx.hasUI || pi.getSessionName() || softNotified) return;
 		softNotified = true;
 		ctx.ui?.notify?.(
-			"Session unnamed — /name to auto-name, /name <name> to set one.",
+			"Session unnamed — /nym to auto-name, /name <name> to set one.",
 			"info",
 		);
+	}
+
+	function isBlankNymEditorText(text: string): boolean {
+		return text.trim() === "/nym";
 	}
 
 	function resetState(ctx?: any) {
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
-		suggestedName = pi.getSessionName() ?? null;
+		suggestedName =
+			pi.getSessionName() ??
+			ctx?.cwd?.split("/")?.filter(Boolean)?.at(-1) ??
+			null;
 		suggestionVersion++;
 		if (ctx?.hasUI) {
 			void updateSuggestedName(ctx);
@@ -349,10 +340,48 @@ export default function namenag(pi: ExtensionAPI) {
 
 	async function forceAutoName(ctx: any): Promise<void> {
 		await autoName(ctx, { ignoreExistingName: true });
-		if (!pi.getSessionName()) {
-			await updateSuggestedName(ctx);
+		if (pi.getSessionName()) return;
+
+		const suggestion = await deriveStructuredSuggestion(ctx, {
+			allowEmptyContext: true,
+		});
+		if (suggestion) {
+			applyName(ctx, suggestion, "auto");
+			return;
 		}
+
+		await updateSuggestedName(ctx);
 	}
+
+	pi.registerCommand("nym", {
+		description: "Auto-name session or set it explicitly (usage: /nym [new name])",
+		getArgumentCompletions: (argumentPrefix) => {
+			const current = pi.getSessionName()?.trim();
+			const value = current || suggestedName?.trim();
+			if (!value) return null;
+			if (argumentPrefix && !value.startsWith(argumentPrefix)) return null;
+
+			return [
+				{
+					value,
+					label: value,
+					description: current
+						? "current session name"
+						: "suggested session name",
+				},
+			];
+		},
+		handler: async (args, ctx) => {
+			const name = args.trim();
+
+			if (name) {
+				applyName(ctx, name, "manual");
+				return;
+			}
+
+			await forceAutoName(ctx);
+		},
+	});
 
 	function installTerminalHook(ctx: any) {
 		removeTerminalHook?.();
@@ -360,33 +389,12 @@ export default function namenag(pi: ExtensionAPI) {
 		if (!ctx.hasUI) return;
 
 		removeTerminalHook = ctx.ui.onTerminalInput((data: string) => {
-			const text = ctx.ui.getEditorText();
-			if (!text.startsWith("/name")) return;
+			if (data !== "\r" && data !== "\n") return;
+			if (!isBlankNymEditorText(ctx.ui.getEditorText())) return;
 
-			if (data === "\t" && isBlankNameEditorText(text)) {
-				const current = pi.getSessionName()?.trim();
-				if (current) {
-					fillNameEditor(ctx, current);
-					return { consume: true };
-				}
-
-				void (async () => {
-					const fallback = suggestedName?.trim() || null;
-					await updateSuggestedName(ctx);
-					const refreshed =
-						pi.getSessionName()?.trim() || suggestedName?.trim() || fallback;
-					if (refreshed && isBlankNameEditorText(ctx.ui.getEditorText())) {
-						fillNameEditor(ctx, refreshed);
-					}
-				})();
-				return { consume: true };
-			}
-
-			if ((data === "\r" || data === "\n") && isBlankNameEditorText(text)) {
-				ctx.ui.setEditorText("");
-				void forceAutoName(ctx);
-				return { consume: true };
-			}
+			ctx.ui.setEditorText("");
+			void forceAutoName(ctx);
+			return { consume: true };
 		});
 	}
 

@@ -1,7 +1,7 @@
 # namenag
 
 Auto-name Pi sessions with structured, hierarchical names.
-Also upgrades `/name` with smart completion.
+Also adds `/nym` for smart naming and completion.
 
 ## how it works
 
@@ -29,30 +29,27 @@ project : worktree : branch : pr : subfolder : description
 - `system:debug-worker-cache`
 - `butter-docs:shaping-api`
 
-### `/name` behavior
+### `/nym` behavior
 
-Pi hardcodes `/name`, so this extension augments the built-in command by
-intercepting terminal input instead of registering a conflicting slash
-command:
+This extension leaves Pi's built-in `/name` alone and adds `/nym`:
 
-- `/name` + enter — force re-derive the session name
-- `/name <name>` + enter — built-in explicit set still works
-- `/name <tab>` — fills with:
+- `/nym` — force re-derive the session name
+- `/nym <name>` — set the session name explicitly
+- `/nym <tab>` — completes with:
   - the current session name, if one exists
-  - otherwise a freshly derived structured suggestion
+  - otherwise a suggested structured name
 
-The suggestion cache is refreshed from session context, and unnamed-tab
-fill re-derives before inserting so late session activity can affect the
-result.
+The suggestion cache is refreshed from session context, so tab-complete
+usually fills a fresh structured name without executing the command.
 
 ### triggers
 
 | Trigger | Threshold | Action |
 |---------|-----------|--------|
-| **Soft** | ≥10 user turns | Toast: "Session unnamed — `/name` to auto-name." |
+| **Soft** | ≥10 user turns | Toast: "Session unnamed — `/nym` to auto-name." |
 | **Hard** | ≥50 user turns | Structured name pipeline → `setSessionName()` |
 | **Hard** | Compaction | Structured name pipeline → `setSessionName()` |
-| **Command** | `/name` | Force re-derive (works even if already named) |
+| **Command** | `/nym` | Force re-derive (works even if already named) |
 
 ### fallback
 
@@ -62,7 +59,7 @@ fails), falls back to old-style 2–4 word kebab-case LLM naming.
 ### safety
 
 - Guards `ctx.hasUI` — silent in detached sessions and sub-agents
-- `/name` ignores existing name; auto-triggers respect it
+- `/nym` ignores existing name; auto-triggers respect it
 - All git/gh calls fail silently with graceful degradation
 - `gh` calls use 3s timeout — no blocking
 

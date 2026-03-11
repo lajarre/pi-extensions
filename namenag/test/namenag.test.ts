@@ -40,7 +40,7 @@ async function flushAsync(): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function createMockPi(opts: { hasModel?: boolean } = {}) {
+function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 	const handlers: Record<string, Handler[]> = {};
 	const notifications: Notification[] = [];
 	const terminalInputListeners = new Set<(data: string) => any>();
@@ -115,6 +115,7 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 	const ctx = {
 		hasUI: true,
 		ui,
+		cwd: opts.cwd ?? "/tmp/mock-project/mock-worktree",
 		sessionManager,
 		modelRegistry,
 		model: opts.hasModel === false ? undefined : expensiveModel,
@@ -223,6 +224,7 @@ function registerTestHandlers(
 	let softNotified = false;
 	let generating = false;
 	let suggestedName: string | null = api.getSessionName() ?? null;
+	let removeTerminalHook: (() => void) | undefined;
 
 	function isActive(
 		ctx: { hasUI: boolean },
@@ -244,7 +246,7 @@ function registerTestHandlers(
 		if (!ctx.hasUI || api.getSessionName() || softNotified) return;
 		softNotified = true;
 		ctx.ui.notify(
-			"Session unnamed — /name to auto-name, /name <name> to set one.",
+			"Session unnamed — /nym to auto-name, /name <name> to set one.",
 			"info",
 		);
 	}
@@ -353,7 +355,7 @@ function registerTestHandlers(
 				api.setSessionName(structured);
 				markNamed(structured);
 				ctx.ui.notify(
-					`Auto-named: ${structured}. /name <name> to change.`,
+					`Auto-named: ${structured}. /nym to re-derive, /name <name> to change.`,
 					"info",
 				);
 				return;
@@ -368,7 +370,7 @@ function registerTestHandlers(
 			api.setSessionName(fallback);
 			markNamed(fallback);
 			ctx.ui.notify(
-				`Auto-named: ${fallback}. /name <name> to change.`,
+				`Auto-named: ${fallback}. /nym to re-derive, /name <name> to change.`,
 				"info",
 			);
 		} catch {
@@ -380,48 +382,67 @@ function registerTestHandlers(
 
 	async function forceAutoName(ctx: any): Promise<void> {
 		await autoName(ctx, { ignoreExistingName: true });
-		if (!api.getSessionName()) computeSuggestedName(ctx);
+		if (api.getSessionName()) return;
+
+		computeSuggestedName(ctx);
+		const suggestion = suggestedName?.trim();
+		if (suggestion) {
+			api.setSessionName(suggestion);
+			markNamed(suggestion);
+			ctx.ui.notify(
+				`Auto-named: ${suggestion}. /nym to re-derive, /name <name> to change.`,
+				"info",
+			);
+		}
 	}
 
-	function isBlankNameEditorText(text: string): boolean {
-		return text.trim() === "/name";
-	}
+	api.registerCommand("nym", {
+		description: "Auto-name session or set it explicitly (usage: /nym [new name])",
+		getArgumentCompletions: (prefix: string) => {
+			const current = api.getSessionName()?.trim();
+			const value = current || suggestedName?.trim();
+			if (!value) return null;
+			if (prefix && !value.startsWith(prefix)) return null;
 
-	function fillNameEditor(ctx: any, name: string) {
-		ctx.ui.setEditorText("");
-		ctx.ui.pasteToEditor(`/name ${name}`);
+			return [
+				{
+					value,
+					label: value,
+					description: current
+						? "current session name"
+						: "suggested session name",
+				},
+			];
+		},
+		handler: async (args: any, ctx: any) => {
+			const name = args.trim();
+			if (name) {
+				api.setSessionName(name);
+				markNamed(name);
+				ctx.ui.notify(`Session named: ${name}`, "info");
+				return;
+			}
+
+			await forceAutoName(ctx);
+		},
+	});
+
+	function isBlankNymEditorText(text: string): boolean {
+		return text.trim() === "/nym";
 	}
 
 	function installTerminalHook(ctx: any) {
+		removeTerminalHook?.();
+		removeTerminalHook = undefined;
 		if (!ctx.hasUI) return;
-		ctx.ui.onTerminalInput((data: string) => {
-			const text = ctx.ui.getEditorText();
-			if (!text.startsWith("/name")) return;
 
-			if (data === "\t" && isBlankNameEditorText(text)) {
-				const current = api.getSessionName()?.trim();
-				if (current) {
-					fillNameEditor(ctx, current);
-					return { consume: true };
-				}
+		removeTerminalHook = ctx.ui.onTerminalInput((data: string) => {
+			if (data !== "\r" && data !== "\n") return;
+			if (!isBlankNymEditorText(ctx.ui.getEditorText())) return;
 
-				void (async () => {
-					const fallback = suggestedName?.trim() || null;
-					computeSuggestedName(ctx);
-					const refreshed =
-						api.getSessionName()?.trim() || suggestedName?.trim() || fallback;
-					if (refreshed && isBlankNameEditorText(ctx.ui.getEditorText())) {
-						fillNameEditor(ctx, refreshed);
-					}
-				})();
-				return { consume: true };
-			}
-
-			if ((data === "\r" || data === "\n") && isBlankNameEditorText(text)) {
-				ctx.ui.setEditorText("");
-				void forceAutoName(ctx);
-				return { consume: true };
-			}
+			ctx.ui.setEditorText("");
+			void forceAutoName(ctx);
+			return { consume: true };
 		});
 	}
 
@@ -429,7 +450,10 @@ function registerTestHandlers(
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
-		suggestedName = api.getSessionName() ?? null;
+		suggestedName =
+			api.getSessionName() ??
+			ctx?.cwd?.split("/")?.filter(Boolean)?.at(-1) ??
+			null;
 		if (ctx?.hasUI) computeSuggestedName(ctx);
 	}
 
@@ -1152,7 +1176,7 @@ describe("fallback behavior", () => {
 	});
 });
 
-describe("/name vs auto-triggers", () => {
+describe("/nym vs auto-triggers", () => {
 	it("auto-trigger (compaction) should NOT overwrite existing name", async () => {
 		const mock = createMockPi();
 		mock.setSessionName("existing-name");
@@ -1164,19 +1188,15 @@ describe("/name vs auto-triggers", () => {
 		assert.equal(mock.getSessionName(), "existing-name");
 	});
 
-	it("/name with no args SHOULD overwrite existing name", async () => {
+	it("/nym with no args SHOULD overwrite existing name", async () => {
 		const mock = createMockPi();
 		mock.setSessionName("existing-name");
 		registerTestHandlers(mock.api, { structuredResult: "forced-new-name" });
 		await mock.fire("session_start");
-		mock.setEditorText("/name");
 
-		const result = mock.sendTerminalInput("\r");
-		await flushAsync();
+		await mock.runCommand("nym", "");
 
-		assert.equal(result?.consume, true);
 		assert.equal(mock.getSessionName(), "forced-new-name");
-		assert.equal(mock.getEditorText(), "");
 	});
 });
 
@@ -1375,19 +1395,30 @@ describe("namenag", () => {
 		});
 	});
 
-	describe("/name terminal interception", () => {
-		it("should not register a conflicting name command", () => {
+	describe("/nym command", () => {
+		it("should register the nym command", () => {
 			const mock = createMockPi();
 			registerTestHandlers(mock.api);
 
+			assert.ok(mock.commands.has("nym"));
 			assert.ok(!mock.commands.has("name"));
 		});
 
-		it("should intercept enter for blank /name", async () => {
+		it("should auto-name on /nym with no args", async () => {
 			const mock = createMockPi();
 			registerTestHandlers(mock.api, { structuredResult: "forced-rename" });
 			await mock.fire("session_start");
-			mock.setEditorText("/name ");
+
+			await mock.runCommand("nym", "");
+
+			assert.equal(mock.getSessionName(), "forced-rename");
+		});
+
+		it("should intercept enter for bare /nym in the editor", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, { structuredResult: "forced-rename" });
+			await mock.fire("session_start");
+			mock.setEditorText("/nym");
 
 			const result = mock.sendTerminalInput("\r");
 			await flushAsync();
@@ -1397,57 +1428,72 @@ describe("namenag", () => {
 			assert.equal(mock.getEditorText(), "");
 		});
 
-		it("should leave explicit /name arguments for the built-in handler", async () => {
+		it("should intercept enter for /nym with trailing space", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { structuredResult: "ignored-auto-name" });
+			registerTestHandlers(mock.api, { structuredResult: "forced-rename" });
 			await mock.fire("session_start");
-			mock.setEditorText("/name manual-name");
+			mock.setEditorText("/nym ");
 
 			const result = mock.sendTerminalInput("\r");
 			await flushAsync();
 
-			assert.equal(result, undefined);
-			assert.equal(mock.getSessionName(), undefined);
-			assert.equal(mock.getEditorText(), "/name manual-name");
+			assert.equal(result?.consume, true);
+			assert.equal(mock.getSessionName(), "forced-rename");
+			assert.equal(mock.getEditorText(), "");
 		});
 
-		it("should tab-fill with the current session name", async () => {
+		it("should set explicit names with /nym <name>", async () => {
+			const mock = createMockPi();
+			registerTestHandlers(mock.api, { structuredResult: "ignored-auto-name" });
+			await mock.fire("session_start");
+
+			await mock.runCommand("nym", "manual-name");
+
+			assert.equal(mock.getSessionName(), "manual-name");
+			assert.ok(
+				mock.notifications.some((n) => n.message.includes("Session named: manual-name")),
+			);
+		});
+
+		it("should tab-complete with the current session name", async () => {
 			const mock = createMockPi();
 			mock.setSessionName("existing-name");
 			registerTestHandlers(mock.api);
 			await mock.fire("session_start");
-			mock.setEditorText("/name ");
 
-			const result = mock.sendTerminalInput("\t");
-
-			assert.equal(result?.consume, true);
-			assert.equal(mock.getEditorText(), "/name existing-name");
+			const completions = mock.getCommandCompletions("nym", "");
+			assert.deepEqual(completions, [
+				{
+					value: "existing-name",
+					label: "existing-name",
+					description: "current session name",
+				},
+			]);
 		});
 
-		it("should tab-fill with a suggested name when unnamed", async () => {
+		it("should tab-complete with a suggested name when unnamed", async () => {
 			const mock = createMockPi();
 			registerTestHandlers(mock.api, { suggestedResult: "project:branch:suggested" });
 			await mock.fire("session_start");
-			mock.setEditorText("/name ");
 
-			const result = mock.sendTerminalInput("\t");
-
-			assert.equal(result?.consume, true);
-			assert.equal(mock.getEditorText(), "/name project:branch:suggested");
+			const completions = mock.getCommandCompletions("nym", "");
+			assert.deepEqual(completions, [
+				{
+					value: "project:branch:suggested",
+					label: "project:branch:suggested",
+					description: "suggested session name",
+				},
+			]);
 		});
 
-		it("should consume tab for blank /name even before suggestion is ready", async () => {
+		it("should filter /nym completions by prefix", async () => {
 			const mock = createMockPi();
 			registerTestHandlers(mock.api, { suggestedResult: "project:branch:suggested" });
 			await mock.fire("session_start");
-			mock.setEditorText("/name");
 
-			const result = mock.sendTerminalInput("\t");
-			await flushAsync();
-
-			assert.equal(result?.consume, true);
-			assert.equal(mock.getEditorText(), "/name project:branch:suggested");
+			assert.equal(mock.getCommandCompletions("nym", "zzz"), null);
 		});
+
 	});
 
 	describe("soft trigger (≥10 turns)", () => {
@@ -1462,8 +1508,8 @@ describe("namenag", () => {
 
 			assert.equal(mock.notifications.length, 1, "Should notify exactly once at 10 turns");
 			assert.ok(
-				mock.notifications[0].message.includes("/name"),
-				"Notification should mention /name command",
+				mock.notifications[0].message.includes("/nym"),
+				"Notification should mention /nym command",
 			);
 		});
 
