@@ -12,10 +12,10 @@
  * structured session name from early conversation context.
  * Falls back to ctx.model if no cheaper alternative is found.
  *
- * Also overrides /name:
+ * Also upgrades the built-in /name command via terminal interception:
  *   - /name          → force re-derive the session name
- *   - /name <name>   → set the session name explicitly
- *   - /name <Tab>    → complete with current or suggested name
+ *   - /name <name>   → built-in explicit set still works
+ *   - /name <Tab>    → fill with current or suggested name
  *
  * Guards: ctx.hasUI (skip in detached/sub-agent sessions).
  *
@@ -57,6 +57,7 @@ export default function namenag(pi: ExtensionAPI) {
 	let generating = false;
 	let suggestedName: string | null = null;
 	let suggestionVersion = 0;
+	let removeTerminalHook: (() => void) | undefined;
 
 	const piExec: ExecFn = async (command, args, options) => {
 		const result = await pi.exec(command, args, {
@@ -113,6 +114,14 @@ export default function namenag(pi: ExtensionAPI) {
 		}
 
 		ctx.ui?.notify?.(`Auto-named: ${name}. /name <name> to change.`, "info");
+	}
+
+	function isBlankNameEditorText(text: string): boolean {
+		return /^\/name(?:\s+)?$/.test(text);
+	}
+
+	function fillNameEditor(ctx: { ui: { setEditorText(text: string): void } }, name: string) {
+		ctx.ui.setEditorText(`/name ${name}`);
 	}
 
 	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
@@ -334,35 +343,40 @@ export default function namenag(pi: ExtensionAPI) {
 		}
 	}
 
-	pi.registerCommand("name", {
-		description: "Auto-name session or set it explicitly (usage: /name [new name])",
-		getArgumentCompletions: (argumentPrefix) => {
-			const current = pi.getSessionName()?.trim();
-			const value = current || suggestedName?.trim();
-			if (!value) return null;
-			if (argumentPrefix && !value.startsWith(argumentPrefix)) return null;
+	function installTerminalHook(ctx: any) {
+		removeTerminalHook?.();
+		removeTerminalHook = undefined;
+		if (!ctx.hasUI) return;
 
-			return [
-				{
-					value,
-					label: value,
-					description: current
-						? "current session name"
-						: "suggested session name",
-				},
-			];
-		},
-		handler: async (args, ctx) => {
-			const name = args.trim();
+		removeTerminalHook = ctx.ui.onTerminalInput((data: string) => {
+			const text = ctx.ui.getEditorText();
+			if (!text.startsWith("/name")) return;
 
-			if (name) {
-				applyName(ctx, name, "manual");
-				return;
+			if (data === "\t" && isBlankNameEditorText(text)) {
+				const current = pi.getSessionName()?.trim();
+				const value = current || suggestedName?.trim();
+				if (value) {
+					fillNameEditor(ctx, value);
+					return { consume: true };
+				}
+
+				void (async () => {
+					await updateSuggestedName(ctx);
+					const refreshed = pi.getSessionName()?.trim() || suggestedName?.trim();
+					if (refreshed && isBlankNameEditorText(ctx.ui.getEditorText())) {
+						fillNameEditor(ctx, refreshed);
+					}
+				})();
+				return { consume: true };
 			}
 
-			await forceAutoName(ctx);
-		},
-	});
+			if ((data === "\r" || data === "\n") && isBlankNameEditorText(text)) {
+				ctx.ui.setEditorText("");
+				void forceAutoName(ctx);
+				return { consume: true };
+			}
+		});
+	}
 
 	pi.registerTool({
 		name: "name_auto",
@@ -389,9 +403,22 @@ export default function namenag(pi: ExtensionAPI) {
 
 	// ── Event Listeners ─────────────────────────────────────────────────
 
-	pi.on("session_start", async (_event, ctx) => resetState(ctx));
-	pi.on("session_switch", async (_event, ctx) => resetState(ctx));
-	pi.on("session_fork", async (_event, ctx) => resetState(ctx));
+	pi.on("session_start", async (_event, ctx) => {
+		installTerminalHook(ctx);
+		resetState(ctx);
+	});
+	pi.on("session_switch", async (_event, ctx) => {
+		installTerminalHook(ctx);
+		resetState(ctx);
+	});
+	pi.on("session_fork", async (_event, ctx) => {
+		installTerminalHook(ctx);
+		resetState(ctx);
+	});
+	pi.on("session_shutdown", async () => {
+		removeTerminalHook?.();
+		removeTerminalHook = undefined;
+	});
 
 	/** Hard trigger: compaction. */
 	pi.on("session_compact", async (_event, ctx) => {

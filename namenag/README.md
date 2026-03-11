@@ -31,16 +31,18 @@ project : worktree : branch : pr : subfolder : description
 
 ### `/name` behavior
 
-This extension overrides Pi's built-in `/name` command:
+Pi hardcodes `/name`, so this extension augments the built-in command by
+intercepting terminal input instead of registering a conflicting slash
+command:
 
-- `/name` — force re-derive the session name
-- `/name <name>` — set the session name explicitly
-- `/name <tab>` — completes with:
+- `/name` + enter — force re-derive the session name
+- `/name <name>` + enter — built-in explicit set still works
+- `/name <tab>` — fills with:
   - the current session name, if one exists
   - otherwise a suggested structured name
 
-The suggestion cache is refreshed from session context, so tab-complete
-usually fills a fresh structured name without executing the command.
+The suggestion cache is refreshed from session context, so tab-fill
+usually inserts a fresh structured name without executing the command.
 
 ### triggers
 
