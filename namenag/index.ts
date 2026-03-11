@@ -55,7 +55,7 @@ export default function namenag(pi: ExtensionAPI) {
 	let turnCount = 0;
 	let softNotified = false;
 	let generating = false;
-	let suggestedName: string | null = pi.getSessionName() ?? null;
+	let suggestedName: string | null = null;
 	let suggestionVersion = 0;
 
 	const piExec: ExecFn = async (command, args, options) => {
