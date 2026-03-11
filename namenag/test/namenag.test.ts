@@ -58,6 +58,10 @@ function createMockPi(opts: { hasModel?: boolean } = {}) {
 		setEditorText(text: string) {
 			editorText = text;
 		},
+		pasteToEditor(text: string) {
+			editorText += text;
+		},
+		setStatus(_key: string, _text: string | undefined) {},
 		getEditorText() {
 			return editorText;
 		},
@@ -380,11 +384,12 @@ function registerTestHandlers(
 	}
 
 	function isBlankNameEditorText(text: string): boolean {
-		return /^\/name(?:\s+)?$/.test(text);
+		return text.trim() === "/name";
 	}
 
 	function fillNameEditor(ctx: any, name: string) {
-		ctx.ui.setEditorText(`/name ${name}`);
+		ctx.ui.setEditorText("");
+		ctx.ui.pasteToEditor(`/name ${name}`);
 	}
 
 	function installTerminalHook(ctx: any) {
@@ -395,15 +400,16 @@ function registerTestHandlers(
 
 			if (data === "\t" && isBlankNameEditorText(text)) {
 				const current = api.getSessionName()?.trim();
-				const value = current || suggestedName?.trim();
-				if (value) {
-					fillNameEditor(ctx, value);
+				if (current) {
+					fillNameEditor(ctx, current);
 					return { consume: true };
 				}
 
 				void (async () => {
+					const fallback = suggestedName?.trim() || null;
 					computeSuggestedName(ctx);
-					const refreshed = api.getSessionName()?.trim() || suggestedName?.trim();
+					const refreshed =
+						api.getSessionName()?.trim() || suggestedName?.trim() || fallback;
 					if (refreshed && isBlankNameEditorText(ctx.ui.getEditorText())) {
 						fillNameEditor(ctx, refreshed);
 					}

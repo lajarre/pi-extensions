@@ -39,10 +39,11 @@ command:
 - `/name <name>` + enter — built-in explicit set still works
 - `/name <tab>` — fills with:
   - the current session name, if one exists
-  - otherwise a suggested structured name
+  - otherwise a freshly derived structured suggestion
 
-The suggestion cache is refreshed from session context, so tab-fill
-usually inserts a fresh structured name without executing the command.
+The suggestion cache is refreshed from session context, and unnamed-tab
+fill re-derives before inserting so late session activity can affect the
+result.
 
 ### triggers
 

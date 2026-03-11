@@ -117,11 +117,22 @@ export default function namenag(pi: ExtensionAPI) {
 	}
 
 	function isBlankNameEditorText(text: string): boolean {
-		return /^\/name(?:\s+)?$/.test(text);
+		return text.trim() === "/name";
 	}
 
-	function fillNameEditor(ctx: { ui: { setEditorText(text: string): void } }, name: string) {
-		ctx.ui.setEditorText(`/name ${name}`);
+	function fillNameEditor(
+		ctx: {
+			ui: {
+				setEditorText(text: string): void;
+				pasteToEditor(text: string): void;
+				setStatus(key: string, text: string | undefined): void;
+			};
+		},
+		name: string,
+	) {
+		ctx.ui.setEditorText("");
+		ctx.ui.pasteToEditor(`/name ${name}`);
+		ctx.ui.setStatus("namenag-fill", undefined);
 	}
 
 	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
@@ -354,15 +365,16 @@ export default function namenag(pi: ExtensionAPI) {
 
 			if (data === "\t" && isBlankNameEditorText(text)) {
 				const current = pi.getSessionName()?.trim();
-				const value = current || suggestedName?.trim();
-				if (value) {
-					fillNameEditor(ctx, value);
+				if (current) {
+					fillNameEditor(ctx, current);
 					return { consume: true };
 				}
 
 				void (async () => {
+					const fallback = suggestedName?.trim() || null;
 					await updateSuggestedName(ctx);
-					const refreshed = pi.getSessionName()?.trim() || suggestedName?.trim();
+					const refreshed =
+						pi.getSessionName()?.trim() || suggestedName?.trim() || fallback;
 					if (refreshed && isBlankNameEditorText(ctx.ui.getEditorText())) {
 						fillNameEditor(ctx, refreshed);
 					}
