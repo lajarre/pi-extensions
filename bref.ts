@@ -512,7 +512,12 @@ async function installPatches(): Promise<void> {
 }
 
 function applyMode(ctx: ExtensionContext): void {
-	ctx.ui.setToolsExpanded(getMode() === "detail");
+	if (getMode() === "regular") {
+		ctx.ui.setToolsExpanded(false);
+	}
+	if (getMode() === "detail") {
+		ctx.ui.setToolsExpanded(true);
+	}
 	ctx.ui.setStatus("bref", undefined);
 }
 
@@ -544,11 +549,17 @@ export default async function bref(pi: ExtensionAPI) {
 	await installPatches();
 
 	pi.registerCommand("bref", {
-		description: "Set bref display mode",
+		description: "Toggle or set bref display mode",
 		handler: async (args, ctx) => {
 			const normalized = normalizeCommandArg(args);
 			if (!normalized) {
-				setMode("condensed");
+				setMode(
+					getMode() === "condensed"
+						? ctx.ui.getToolsExpanded()
+							? "detail"
+							: "regular"
+						: "condensed",
+				);
 				applyMode(ctx);
 				ctx.ui.notify(`bref: ${getMode()}`, "info");
 				return;
