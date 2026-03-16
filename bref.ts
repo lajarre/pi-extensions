@@ -5,7 +5,6 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import {
 	Container,
 	Markdown,
-	matchesKey,
 	truncateToWidth,
 } from "@mariozechner/pi-tui";
 
@@ -20,8 +19,6 @@ type ToolLikeResult = {
 type PatchState = {
 	mode: BrefMode;
 	patched: boolean;
-	lastCtx?: ExtensionContext;
-	terminalInputUnsubscribe?: (() => void) | undefined;
 };
 
 type ThemeModule = {
@@ -515,7 +512,6 @@ async function installPatches(): Promise<void> {
 }
 
 function applyMode(ctx: ExtensionContext): void {
-	state.lastCtx = ctx;
 	ctx.ui.setToolsExpanded(getMode() === "detail");
 	ctx.ui.setStatus("bref", undefined);
 }
@@ -547,24 +543,14 @@ function setModeFromCommand(arg: string): BrefMode | undefined {
 export default async function bref(pi: ExtensionAPI) {
 	await installPatches();
 
-	const ensureInputHook = (ctx: ExtensionContext) => {
-		state.lastCtx = ctx;
-		if (state.terminalInputUnsubscribe) return;
-		state.terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
-			if (!matchesKey(data, "ctrl+o")) return undefined;
-			if (!state.lastCtx) return { consume: true };
-			cycleMode(state.lastCtx);
-			return { consume: true };
-		});
-	};
-
 	pi.registerCommand("bref", {
-		description: "Cycle or set bref display mode",
+		description: "Set bref display mode",
 		handler: async (args, ctx) => {
 			const normalized = normalizeCommandArg(args);
-			if (!normalized || normalized === "status") {
-				ctx.ui.notify(`bref: ${getMode()}`, "info");
+			if (!normalized) {
+				setMode("condensed");
 				applyMode(ctx);
+				ctx.ui.notify(`bref: ${getMode()}`, "info");
 				return;
 			}
 
@@ -576,7 +562,7 @@ export default async function bref(pi: ExtensionAPI) {
 			const mode = setModeFromCommand(args);
 			if (!mode) {
 				ctx.ui.notify(
-					"usage: /bref [regular|detail|condensed|cycle|status]",
+					"usage: /bref [regular|detail|condensed|cycle]",
 					"warning",
 				);
 				return;
@@ -589,27 +575,18 @@ export default async function bref(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		ensureInputHook(ctx);
 		applyMode(ctx);
 	});
 
 	pi.on("session_switch", async (_event, ctx) => {
-		ensureInputHook(ctx);
 		applyMode(ctx);
 	});
 
 	pi.on("session_fork", async (_event, ctx) => {
-		ensureInputHook(ctx);
 		applyMode(ctx);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
-		ensureInputHook(ctx);
 		applyMode(ctx);
-	});
-
-	pi.on("session_shutdown", async () => {
-		state.terminalInputUnsubscribe?.();
-		state.terminalInputUnsubscribe = undefined;
 	});
 }
