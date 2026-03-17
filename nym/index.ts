@@ -8,9 +8,9 @@
  *   Soft (notify only):
  *     - ≥10 user turns — toast reminder
  *
- * Uses the cheapest available model (by input token cost) to generate a
+ * Tries available models cheapest-first, one per provider, to generate a
  * structured session name from early conversation context.
- * Falls back to ctx.model if no cheaper alternative is found.
+ * If a provider fails (no credits, rate limit), skips to the next provider.
  *
  * Also adds /nym:
  *   - /nym          → force re-derive the session name
@@ -37,6 +37,9 @@ import {
 
 const SOFT_THRESHOLD = 10;
 const HARD_THRESHOLD = 50;
+import { appendFileSync } from "node:fs";
+const NYM_DEBUG = !!process.env.NYM_DEBUG;
+const NYM_LOG = process.env.NYM_DEBUG ? "/tmp/nym-debug.log" : null;
 
 const FALLBACK_NAME_PROMPT = `You are a session naming assistant. Given conversation context, produce a short session name.
 
@@ -156,29 +159,63 @@ export default function nym(pi: ExtensionAPI) {
 		return userMessages.join("\n").slice(0, MAX_CHARS).trim();
 	}
 
-	/** Pick the cheapest available model with a valid API key. */
-	async function resolveModel(ctx: { modelRegistry: any; model: any }) {
-		const available = ctx.modelRegistry.getAvailable();
-		if (!Array.isArray(available) || available.length === 0) {
-			if (!ctx.model) return null;
-			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-			return apiKey ? { model: ctx.model, apiKey } : null;
-		}
-
-		const sorted = [...available].sort(
-			(a: any, b: any) =>
-				(a.cost?.input ?? Infinity) - (b.cost?.input ?? Infinity),
-		);
-
-		for (const candidate of sorted) {
-			const apiKey = await ctx.modelRegistry.getApiKey(candidate);
-			if (apiKey) return { model: candidate, apiKey };
-		}
-
-		return null;
+	function dbg(...args: any[]) {
+		if (!NYM_LOG) return;
+		const msg = args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
+		appendFileSync(NYM_LOG, `[nym ${new Date().toISOString()}] ${msg}\n`);
 	}
 
-	async function generateWithPrompt(
+	/**
+	 * Build a ranked list of models to try, cheapest first.
+	 * Deduplicates by provider so a failed provider is skipped
+	 * entirely — the next candidate is always a different provider.
+	 */
+	async function resolveModelCandidates(
+		ctx: { modelRegistry: any; model: any },
+	): Promise<ResolvedModel[]> {
+		const candidates: ResolvedModel[] = [];
+		const seenProviders = new Set<string>();
+
+		const available = ctx.modelRegistry.getAvailable();
+		dbg("available models:", available?.length ?? 0);
+		if (Array.isArray(available) && available.length > 0) {
+			const sorted = [...available].sort(
+				(a: any, b: any) =>
+					(a.cost?.input ?? Infinity) - (b.cost?.input ?? Infinity),
+			);
+
+			for (const model of sorted) {
+				const provider = model.provider ?? model.id?.split("/")[0];
+				if (provider && seenProviders.has(provider)) {
+					dbg("skip duplicate provider:", provider, model.id);
+					continue;
+				}
+				const apiKey = await ctx.modelRegistry.getApiKey(model);
+				if (!apiKey) {
+					dbg("no api key for:", provider, model.id);
+					continue;
+				}
+				if (provider) seenProviders.add(provider);
+				candidates.push({ model, apiKey });
+				dbg("candidate:", provider, model.id, `cost=${model.cost?.input}`);
+			}
+		}
+
+		// Fallback: session's own model if not already covered.
+		if (candidates.length === 0 && ctx.model) {
+			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+			if (apiKey) {
+				candidates.push({ model: ctx.model, apiKey });
+				dbg("fallback to session model:", ctx.model.id);
+			}
+		}
+
+		dbg("total candidates:", candidates.length);
+		return candidates;
+	}
+
+	/** Single-model prompt call. Throws on failure. */
+	function callModel(
 		prompt: string,
 		context: string,
 		resolved: ResolvedModel,
@@ -191,28 +228,58 @@ export default function nym(pi: ExtensionAPI) {
 			timestamp: Date.now(),
 		};
 
-		const response = await complete(
+		return complete(
 			resolved.model,
 			{ systemPrompt: prompt, messages: [userMessage] },
 			{ apiKey: resolved.apiKey, maxTokens: 64 },
+		).then((response) =>
+			response.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("")
+				.trim(),
 		);
+	}
 
-		return response.content
-			.filter((c): c is { type: "text"; text: string } => c.type === "text")
-			.map((c) => c.text)
-			.join("")
-			.trim();
+	/**
+	 * Try prompt across candidates until one succeeds.
+	 * Each failure skips to the next provider.
+	 */
+	async function generateWithPrompt(
+		prompt: string,
+		context: string,
+		candidates: ResolvedModel[],
+	): Promise<string> {
+		const promptTag = prompt.includes("activity") ? "description" : "fallback";
+		dbg(`generateWithPrompt[${promptTag}]: ${candidates.length} candidates, context=${context.length}chars`);
+		for (const candidate of candidates) {
+			const id = candidate.model?.id ?? "unknown";
+			try {
+				const result = await callModel(prompt, context, candidate);
+				if (!result) {
+					dbg(`generateWithPrompt[${promptTag}]: ${id} → empty, trying next`);
+					continue;
+				}
+				dbg(`generateWithPrompt[${promptTag}]: ${id} → "${result}"`);
+				return result;
+			} catch (err: any) {
+				dbg(`generateWithPrompt[${promptTag}]: ${id} FAILED:`, err?.message ?? err);
+				continue;
+			}
+		}
+		dbg(`generateWithPrompt[${promptTag}]: all candidates exhausted`);
+		throw new Error("All model candidates exhausted");
 	}
 
 	async function generateFallbackName(
 		context: string,
-		resolved: ResolvedModel,
+		candidates: ResolvedModel[],
 	): Promise<string | null> {
 		try {
 			const raw = await generateWithPrompt(
 				FALLBACK_NAME_PROMPT,
 				context,
-				resolved,
+				candidates,
 			);
 			const name = sanitizeGeneratedName(raw);
 			return name || null;
@@ -228,14 +295,14 @@ export default function nym(pi: ExtensionAPI) {
 		const context = gatherContext(ctx);
 		if (!context && !options.allowEmptyContext) return null;
 
-		let resolved: ResolvedModel | null = null;
+		let candidates: ResolvedModel[] = [];
 		if (context) {
-			resolved = await resolveModel(ctx);
+			candidates = await resolveModelCandidates(ctx);
 		}
 
 		const llmCallback: DescriptionLLMFn = async (contextText: string) => {
-			if (!resolved) return "";
-			return generateWithPrompt(DESCRIPTION_PROMPT, contextText, resolved);
+			if (candidates.length === 0) return "";
+			return generateWithPrompt(DESCRIPTION_PROMPT, contextText, candidates);
 		};
 
 		return structuredName(ctx.cwd, piExec, context, llmCallback);
@@ -256,7 +323,8 @@ export default function nym(pi: ExtensionAPI) {
 			});
 
 			if (version === suggestionVersion) {
-				suggestedName = suggestion;
+				// Bare project name isn't useful as a tab suggestion.
+				suggestedName = suggestion?.includes(":") ? suggestion : null;
 			}
 		} catch {
 			if (version === suggestionVersion) {
@@ -270,13 +338,22 @@ export default function nym(pi: ExtensionAPI) {
 		ctx: any,
 		options: { ignoreExistingName?: boolean } = {},
 	): Promise<void> {
-		if (!isActive(ctx, options)) return;
+		dbg("autoName: enter", { ignoreExisting: options.ignoreExistingName, hasName: !!pi.getSessionName(), generating });
+		if (!isActive(ctx, options)) {
+			dbg("autoName: not active, skip");
+			return;
+		}
 
 		const context = gatherContext(ctx);
-		if (!context) return;
+		dbg("autoName: context length:", context.length, context ? `"${context.slice(0, 80)}..."` : "(empty)");
+		if (!context) {
+			dbg("autoName: no context, skip");
+			return;
+		}
 
-		const resolved = await resolveModel(ctx);
-		if (!resolved) {
+		const candidates = await resolveModelCandidates(ctx);
+		if (candidates.length === 0) {
+			dbg("autoName: no candidates, softNotify");
 			softNotify(ctx);
 			return;
 		}
@@ -287,22 +364,35 @@ export default function nym(pi: ExtensionAPI) {
 				return generateWithPrompt(
 					DESCRIPTION_PROMPT,
 					contextText,
-					resolved,
+					candidates,
 				);
 			};
 
 			const name = await structuredName(ctx.cwd, piExec, context, llmCallback);
-			if (name) {
+			dbg("autoName: structuredName →", JSON.stringify(name));
+
+			// Multi-segment name (has ":") is good. A bare project name
+			// (no ":") needs a description appended via fallback.
+			if (name && name.includes(":")) {
+				dbg("autoName: applying multi-segment name");
 				applyName(ctx, name, "auto");
 				return;
 			}
 
-			const fallback = await generateFallbackName(context, resolved);
+			dbg("autoName: bare name, trying fallback");
+			const fallback = await generateFallbackName(context, candidates);
+			dbg("autoName: fallback →", JSON.stringify(fallback));
+			if (fallback && name) {
+				applyName(ctx, `${name}:${fallback}`, "auto");
+				return;
+			}
 			if (fallback) {
 				applyName(ctx, fallback, "auto");
 				return;
 			}
 
+			// All LLM calls failed — stay unnamed, retry on next trigger.
+			dbg("autoName: all failed, softNotify");
 			softNotify(ctx);
 		} catch {
 			softNotify(ctx);
@@ -328,10 +418,7 @@ export default function nym(pi: ExtensionAPI) {
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
-		suggestedName =
-			pi.getSessionName() ??
-			ctx?.cwd?.split("/")?.filter(Boolean)?.at(-1) ??
-			null;
+		suggestedName = pi.getSessionName() ?? null;
 		suggestionVersion++;
 		if (ctx?.hasUI) {
 			void updateSuggestedName(ctx);
@@ -339,17 +426,24 @@ export default function nym(pi: ExtensionAPI) {
 	}
 
 	async function forceAutoName(ctx: any): Promise<void> {
+		dbg("forceAutoName: enter");
 		await autoName(ctx, { ignoreExistingName: true });
-		if (pi.getSessionName()) return;
+		if (pi.getSessionName()) {
+			dbg("forceAutoName: autoName succeeded:", pi.getSessionName());
+			return;
+		}
 
+		dbg("forceAutoName: autoName didn't name, trying deriveStructuredSuggestion");
 		const suggestion = await deriveStructuredSuggestion(ctx, {
 			allowEmptyContext: true,
 		});
-		if (suggestion) {
+		dbg("forceAutoName: suggestion →", JSON.stringify(suggestion));
+		if (suggestion && suggestion.includes(":")) {
 			applyName(ctx, suggestion, "auto");
 			return;
 		}
 
+		dbg("forceAutoName: falling back to updateSuggestedName");
 		await updateSuggestedName(ctx);
 	}
 
