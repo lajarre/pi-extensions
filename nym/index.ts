@@ -93,6 +93,14 @@ export default function nym(pi: ExtensionAPI) {
 		suggestionVersion++;
 	}
 
+	function showGenerating(ctx: any) {
+		ctx.ui?.setStatus?.("nym", "✦ naming…");
+	}
+
+	function clearGenerating(ctx: any) {
+		ctx.ui?.setStatus?.("nym", undefined);
+	}
+
 	function sanitizeGeneratedName(raw: string): string {
 		return raw
 			.toLowerCase()
@@ -359,6 +367,7 @@ export default function nym(pi: ExtensionAPI) {
 		}
 
 		generating = true;
+		showGenerating(ctx);
 		try {
 			const llmCallback: DescriptionLLMFn = async (contextText: string) => {
 				return generateWithPrompt(
@@ -398,6 +407,7 @@ export default function nym(pi: ExtensionAPI) {
 			softNotify(ctx);
 		} finally {
 			generating = false;
+			clearGenerating(ctx);
 		}
 	}
 
