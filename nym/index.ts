@@ -60,6 +60,7 @@ export default function nym(pi: ExtensionAPI) {
 	let generating = false;
 	let suggestedName: string | null = null;
 	let suggestionVersion = 0;
+	let deriving = false;
 	let removeTerminalHook: (() => void) | undefined;
 
 	const piExec: ExecFn = async (command, args, options) => {
@@ -318,6 +319,7 @@ export default function nym(pi: ExtensionAPI) {
 
 	async function updateSuggestedName(ctx: any): Promise<void> {
 		const version = ++suggestionVersion;
+		deriving = true;
 		showGenerating(ctx);
 
 		try {
@@ -334,6 +336,7 @@ export default function nym(pi: ExtensionAPI) {
 				suggestedName = null;
 			}
 		} finally {
+			deriving = false;
 			clearGenerating(ctx);
 		}
 	}
@@ -479,6 +482,12 @@ export default function nym(pi: ExtensionAPI) {
 						description: "suggested name",
 					});
 				}
+			} else if (!suggested && (generating || deriving)) {
+				completions.push({
+					value: "",
+					label: "✦ deriving…",
+					description: "try again shortly",
+				});
 			}
 
 			return completions.length > 0 ? completions : null;
