@@ -250,7 +250,7 @@ export type DescriptionLLMFn = (context: string) => Promise<string>;
 export const DESCRIPTION_PROMPT = `You are a session naming assistant. Given recent conversation context, produce a short activity description.
 
 Rules:
-- 1–3 words, kebab-case (e.g. "refactor-auth", "debug-cache", "shaping-api")
+- 1–3 words, kebab-case, MAX 20 characters (e.g. "refactor-auth", "debug-cache", "shaping-api")
 - Describe the current activity or topic
 - Be specific, not generic (not "coding" or "chatting")
 - Output ONLY the description, nothing else — no quotes, no explanation`;

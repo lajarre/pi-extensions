@@ -44,7 +44,7 @@ const NYM_LOG = process.env.NYM_DEBUG ? "/tmp/nym-debug.log" : null;
 const FALLBACK_NAME_PROMPT = `You are a session naming assistant. Given conversation context, produce a short session name.
 
 Rules:
-- 2–4 words, kebab-case (e.g. "refactor-auth-module", "search-feature-shaping")
+- 1–3 words, kebab-case, MAX 20 characters (e.g. "refactor-auth", "debug-cache")
 - Capture the primary topic or activity
 - Be specific, not generic (not "coding-session" or "chat")
 - Output ONLY the name, nothing else — no quotes, no explanation`;
