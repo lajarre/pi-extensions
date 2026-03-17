@@ -320,12 +320,6 @@ export default function nym(pi: ExtensionAPI) {
 		const version = ++suggestionVersion;
 
 		try {
-			const current = pi.getSessionName()?.trim();
-			if (current) {
-				if (version === suggestionVersion) suggestedName = current;
-				return;
-			}
-
 			const suggestion = await deriveStructuredSuggestion(ctx, {
 				allowEmptyContext: true,
 			});
@@ -461,19 +455,30 @@ export default function nym(pi: ExtensionAPI) {
 		description: "Auto-name session or set it explicitly (usage: /nym [new name])",
 		getArgumentCompletions: (argumentPrefix) => {
 			const current = pi.getSessionName()?.trim();
-			const value = current || suggestedName?.trim();
-			if (!value) return null;
-			if (argumentPrefix && !value.startsWith(argumentPrefix)) return null;
+			const suggested = suggestedName?.trim();
+			const completions: { value: string; label: string; description: string }[] = [];
 
-			return [
-				{
-					value,
-					label: value,
-					description: current
-						? "current session name"
-						: "suggested session name",
-				},
-			];
+			if (current) {
+				if (!argumentPrefix || current.startsWith(argumentPrefix)) {
+					completions.push({
+						value: current,
+						label: current,
+						description: "current name",
+					});
+				}
+			}
+
+			if (suggested && suggested !== current) {
+				if (!argumentPrefix || suggested.startsWith(argumentPrefix)) {
+					completions.push({
+						value: suggested,
+						label: suggested,
+						description: "suggested name",
+					});
+				}
+			}
+
+			return completions.length > 0 ? completions : null;
 		},
 		handler: async (args, ctx) => {
 			const name = args.trim();
