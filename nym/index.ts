@@ -133,8 +133,8 @@ export default function nym(pi: ExtensionAPI) {
 	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
 	function gatherContext(ctx: { sessionManager: { getBranch(): SessionEntry[] } }): string {
 		const entries = ctx.sessionManager.getBranch();
-		const MAX_CHARS = 500;
-		const MAX_MESSAGES = 3;
+		const MAX_CHARS = 1500;
+		const MAX_MESSAGES = 10;
 		const userMessages: string[] = [];
 
 		for (
@@ -318,6 +318,7 @@ export default function nym(pi: ExtensionAPI) {
 
 	async function updateSuggestedName(ctx: any): Promise<void> {
 		const version = ++suggestionVersion;
+		showGenerating(ctx);
 
 		try {
 			const suggestion = await deriveStructuredSuggestion(ctx, {
@@ -332,6 +333,8 @@ export default function nym(pi: ExtensionAPI) {
 			if (version === suggestionVersion) {
 				suggestedName = null;
 			}
+		} finally {
+			clearGenerating(ctx);
 		}
 	}
 
