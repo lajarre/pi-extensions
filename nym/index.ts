@@ -576,7 +576,10 @@ export default function nym(pi: ExtensionAPI) {
 			softNotify(ctx);
 		}
 
-		if (!pi.getSessionName() && ctx.hasUI) {
+		// Keep suggestion fresh for /nym<tab>. Throttle for named
+		// sessions (every 5 turns) since it's less urgent.
+		const shouldUpdate = !pi.getSessionName() || turnCount % 5 === 0;
+		if (ctx.hasUI && shouldUpdate) {
 			void updateSuggestedName(ctx);
 		}
 	});
