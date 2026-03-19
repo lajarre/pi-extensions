@@ -115,6 +115,7 @@ export async function runWiggumLoop(
 	const loopStart = Date.now();
 	let lastOutput = "";
 	let consecutiveErrors = 0;
+	let completedIterations = 0;
 
 	if (options.logFile) {
 		try { writeFileSync(options.logFile, ""); } catch {}
@@ -252,6 +253,8 @@ export async function runWiggumLoop(
 			agentSignal: shouldStop(lastOutput, flow.gateConfig.stopSignal),
 		});
 
+		completedIterations = i;
+
 		if (gate.shouldStop) {
 			writeLogLine(options.logFile, {
 				type: "summary",
@@ -263,15 +266,14 @@ export async function runWiggumLoop(
 		}
 	}
 
-	const finalMax = options.getMaxIterations?.() ?? flow.maxIterations;
 	writeLogLine(options.logFile, {
 		type: "summary",
-		iterations: finalMax,
+		iterations: completedIterations,
 		exitReason: "max-iterations",
 		totalDurationMs: Date.now() - loopStart,
 	});
 	return {
-		iterations: finalMax,
+		iterations: completedIterations,
 		exitReason: "max-iterations",
 		lastOutput,
 	};
