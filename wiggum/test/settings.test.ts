@@ -16,7 +16,6 @@ function defaultSettings(overrides: Partial<WiggumSettings> = {}): WiggumSetting
 		testCommand: DEFAULT_TEST_COMMAND,
 		exitScript: null,
 		reviewPrompt: DEFAULT_WIGGUM_REVIEW_PROMPT,
-		logFile: "wiggum-log.jsonl",
 		...overrides,
 	};
 }

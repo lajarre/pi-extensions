@@ -16,7 +16,6 @@ export interface WiggumSettings {
 	testCommand: string;
 	exitScript: string | null;
 	reviewPrompt: string;
-	logFile: string;
 }
 
 // ── Constants ────────────────────────────────────────────────
@@ -68,7 +67,6 @@ interface RawSettings {
 	testCommand?: string;
 	exitScript?: string;
 	reviewPrompt?: string;
-	logFile?: string;
 }
 
 export function loadSettings(): WiggumSettings {
@@ -102,10 +100,6 @@ export function loadSettings(): WiggumSettings {
 			typeof raw.reviewPrompt === "string" && raw.reviewPrompt.trim()
 				? raw.reviewPrompt.trim()
 				: DEFAULT_WIGGUM_REVIEW_PROMPT,
-		logFile:
-			typeof raw.logFile === "string" && raw.logFile.trim()
-				? raw.logFile.trim()
-				: "wiggum-log.jsonl",
 	};
 }
 
