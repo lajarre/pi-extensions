@@ -248,6 +248,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 			stopSignal: settings.stopSignal,
 			testCommand: settings.testCommand,
 			exitScript,
+			minIterations: settings.minIterations,
 		};
 
 		loopActive = true;

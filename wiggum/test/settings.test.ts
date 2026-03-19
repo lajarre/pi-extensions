@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	DEFAULT_MAX_ITERATIONS,
+	DEFAULT_MIN_ITERATIONS,
 	DEFAULT_STOP_SIGNAL,
 	DEFAULT_TEST_COMMAND,
 	DEFAULT_WIGGUM_REVIEW_PROMPT,
@@ -12,6 +13,7 @@ import {
 function defaultSettings(overrides: Partial<WiggumSettings> = {}): WiggumSettings {
 	return {
 		maxIterations: DEFAULT_MAX_ITERATIONS,
+		minIterations: DEFAULT_MIN_ITERATIONS,
 		stopSignal: DEFAULT_STOP_SIGNAL,
 		testCommand: DEFAULT_TEST_COMMAND,
 		exitScript: null,
@@ -82,5 +84,9 @@ describe("default constants", () => {
 
 	it("review prompt is non-empty", () => {
 		assert.ok(DEFAULT_WIGGUM_REVIEW_PROMPT.length > 50);
+	});
+
+	it("DEFAULT_MIN_ITERATIONS is 2", () => {
+		assert.equal(DEFAULT_MIN_ITERATIONS, 2);
 	});
 });

@@ -241,6 +241,7 @@ export async function runWiggumLoop(
 			flow.gateConfig,
 			cwd,
 			exec,
+			i,
 		);
 
 		options.onIterationEnd?.(i, max, gate.reason);
@@ -249,7 +250,12 @@ export async function runWiggumLoop(
 			iteration: i,
 			maxIterations: max,
 			durationMs: Date.now() - iterationStart,
-			gateResult: { shouldStop: gate.shouldStop, reason: gate.reason },
+			gateResult: {
+				shouldStop: gate.shouldStop,
+				reason: gate.reason,
+				testOutput: gate.testOutput,
+				exitScriptOutput: gate.exitScriptOutput,
+			},
 			agentSignal: shouldStop(lastOutput, flow.gateConfig.stopSignal),
 		});
 

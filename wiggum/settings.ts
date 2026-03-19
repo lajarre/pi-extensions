@@ -12,6 +12,7 @@ export type ExecFn = (
 
 export interface WiggumSettings {
 	maxIterations: number;
+	minIterations: number;
 	stopSignal: string;
 	testCommand: string;
 	exitScript: string | null;
@@ -27,6 +28,8 @@ export const SETTINGS_PATH = join(
 export const DEFAULT_STOP_SIGNAL = "WIGGUM_STOP";
 
 export const DEFAULT_MAX_ITERATIONS = 10;
+
+export const DEFAULT_MIN_ITERATIONS = 2;
 
 export const DEFAULT_TEST_COMMAND = "lefthook run pre-push";
 
@@ -63,6 +66,7 @@ export const FALLBACK_CONTINUE_PATTERNS: RegExp[] = [
 
 interface RawSettings {
 	maxIterations?: number;
+	minIterations?: number;
 	stopSignal?: string;
 	testCommand?: string;
 	exitScript?: string;
@@ -84,6 +88,10 @@ export function loadSettings(): WiggumSettings {
 			typeof raw.maxIterations === "number" && raw.maxIterations >= 1
 				? raw.maxIterations
 				: DEFAULT_MAX_ITERATIONS,
+		minIterations:
+			typeof raw.minIterations === "number" && raw.minIterations >= 1
+				? raw.minIterations
+				: DEFAULT_MIN_ITERATIONS,
 		stopSignal:
 			typeof raw.stopSignal === "string" && raw.stopSignal.trim()
 				? raw.stopSignal.trim()

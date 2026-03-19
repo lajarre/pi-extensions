@@ -151,10 +151,11 @@ describe("evaluateGate", () => {
 			"WIGGUM_STOP",
 			gateConfig({ exitScript: "./ok.sh" }),
 			"/tmp",
-			mockExec(0),
+			mockExec(0, "ok"),
 		);
 		assert.ok(result.shouldStop);
 		assert.equal(result.reason, "all gates passed");
+		assert.equal(result.testOutput, "ok");
 	});
 
 	it("continues when tests fail", async () => {
@@ -205,9 +206,60 @@ describe("evaluateGate", () => {
 			"WIGGUM_STOP",
 			gateConfig({ exitScript: null }),
 			"/tmp",
-			mockExec(0),
+			mockExec(0, "ok"),
 		);
 		assert.ok(result.shouldStop);
 		assert.equal(result.reason, "all gates passed (no exit script)");
+	});
+
+	// ── minIterations ────────────────────────────────────────
+
+	it("respects minIterations — blocks early exit", async () => {
+		const result = await evaluateGate(
+			"WIGGUM_STOP",
+			gateConfig({ minIterations: 3 }),
+			"/tmp",
+			mockExec(0, "ok"),
+			1, // currentIteration
+		);
+		assert.ok(!result.shouldStop);
+		assert.ok(result.reason.includes("below minimum"));
+	});
+
+	it("allows exit at minIterations", async () => {
+		const result = await evaluateGate(
+			"WIGGUM_STOP",
+			gateConfig({ minIterations: 2 }),
+			"/tmp",
+			mockExec(0, "ok"),
+			2, // currentIteration
+		);
+		assert.ok(result.shouldStop);
+	});
+
+	it("allows exit above minIterations", async () => {
+		const result = await evaluateGate(
+			"WIGGUM_STOP",
+			gateConfig({ minIterations: 2 }),
+			"/tmp",
+			mockExec(0, "ok"),
+			5,
+		);
+		assert.ok(result.shouldStop);
+	});
+
+	// ── output fields / warnings ─────────────────────────────
+
+	it("warns when test command produces no output", async () => {
+		const result = await evaluateGate(
+			"WIGGUM_STOP",
+			gateConfig({ minIterations: 1 }),
+			"/tmp",
+			mockExec(0, ""), // empty output
+			1,
+		);
+		assert.ok(result.shouldStop); // still passes
+		assert.ok(result.reason.includes("warning"));
+		assert.ok(result.reason.includes("no output"));
 	});
 });

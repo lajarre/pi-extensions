@@ -10,6 +10,7 @@ export interface GateConfig {
 	stopSignal: string;
 	testCommand: string;
 	exitScript: string | null;
+	minIterations?: number;
 }
 
 export interface CommandResult {
@@ -20,6 +21,8 @@ export interface CommandResult {
 export interface GateResult {
 	shouldStop: boolean;
 	reason: string;
+	testOutput?: string;
+	exitScriptOutput?: string;
 }
 
 // ── Signal detection ─────────────────────────────────────────
@@ -96,6 +99,7 @@ export async function evaluateGate(
 	config: GateConfig,
 	cwd: string,
 	exec: ExecFn,
+	currentIteration?: number,
 ): Promise<GateResult> {
 	// layer 1: test command
 	const testResult = await runCommand(config.testCommand, cwd, exec);
@@ -103,8 +107,13 @@ export async function evaluateGate(
 		return {
 			shouldStop: false,
 			reason: `tests failed: ${testResult.output.slice(0, 200)}`,
+			testOutput: testResult.output,
 		};
 	}
+
+	const testWarning = testResult.output.trim() === ""
+		? "warning: test command produced no output (may not have run)"
+		: undefined;
 
 	// layer 2: agent signal
 	const agentDone = shouldStop(agentOutput, config.stopSignal);
@@ -112,12 +121,32 @@ export async function evaluateGate(
 		return {
 			shouldStop: false,
 			reason: "agent did not signal completion",
+			testOutput: testResult.output,
+		};
+	}
+
+	// minIterations check: ignore stop signal if below minimum
+	if (
+		config.minIterations != null
+		&& currentIteration != null
+		&& currentIteration < config.minIterations
+	) {
+		return {
+			shouldStop: false,
+			reason: `below minimum iterations (${currentIteration}/${config.minIterations})`,
+			testOutput: testResult.output,
 		};
 	}
 
 	// skip layer 3 when no exit script — test already passed
 	if (!config.exitScript) {
-		return { shouldStop: true, reason: "all gates passed (no exit script)" };
+		const reasonParts = ["all gates passed (no exit script)"];
+		if (testWarning) reasonParts.push(testWarning);
+		return {
+			shouldStop: true,
+			reason: reasonParts.join(" — "),
+			testOutput: testResult.output,
+		};
 	}
 
 	// layer 3: exit script
@@ -127,8 +156,17 @@ export async function evaluateGate(
 		return {
 			shouldStop: false,
 			reason: `exit script failed: ${exitResult.output.slice(0, 200)}`,
+			testOutput: testResult.output,
+			exitScriptOutput: exitResult.output,
 		};
 	}
 
-	return { shouldStop: true, reason: "all gates passed" };
+	const reasonParts = ["all gates passed"];
+	if (testWarning) reasonParts.push(testWarning);
+	return {
+		shouldStop: true,
+		reason: reasonParts.join(" — "),
+		testOutput: testResult.output,
+		exitScriptOutput: exitResult.output,
+	};
 }
