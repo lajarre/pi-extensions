@@ -140,6 +140,12 @@ export async function runWiggumLoop(
 		} catch (err) {
 			lastOutput = err instanceof Error ? err.message : String(err);
 			options.onIterationEnd?.(i, flow.maxIterations, `context error: ${lastOutput}`);
+			writeLogLine(options.logFile, {
+				iteration: i,
+				maxIterations: flow.maxIterations,
+				durationMs: Date.now() - iterationStart,
+				error: `context error: ${lastOutput}`,
+			});
 			consecutiveErrors++;
 			if (consecutiveErrors >= 3) {
 				writeLogLine(options.logFile, {
@@ -190,6 +196,12 @@ export async function runWiggumLoop(
 		} catch (err) {
 			lastOutput = err instanceof Error ? err.message : String(err);
 			options.onIterationEnd?.(i, flow.maxIterations, `agent error: ${lastOutput}`);
+			writeLogLine(options.logFile, {
+				iteration: i,
+				maxIterations: flow.maxIterations,
+				durationMs: Date.now() - iterationStart,
+				error: `agent error: ${lastOutput}`,
+			});
 			consecutiveErrors++;
 			if (consecutiveErrors >= 3) {
 				writeLogLine(options.logFile, {
