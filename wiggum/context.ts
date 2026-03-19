@@ -112,22 +112,30 @@ export async function assembleQualityContext(
 		}
 
 		// changed file list
-		const fileCmd = scope === "uncommitted"
-			? ["git", "diff", "--name-only"]
+		const fileCmds = scope === "uncommitted"
+			? [
+				["git", "diff", "--name-only"],
+				["git", "diff", "--name-only", "--cached"],
+			]
 			: scope === "last-commit"
-				? ["git", "diff", "--name-only", "HEAD~1"]
-				: ["git", "diff", "--name-only", "main..HEAD"];
-		try {
-			const fileResult = await exec(fileCmd[0]!, fileCmd.slice(1), { cwd });
-			const files = fileResult.stdout.trim();
-			if (files) {
-				parts.push("");
-				parts.push("## Changed files");
-				parts.push("");
-				parts.push(files);
+				? [["git", "diff", "--name-only", "HEAD~1"]]
+				: [["git", "diff", "--name-only", "main..HEAD"]];
+		const allFiles = new Set<string>();
+		for (const cmd of fileCmds) {
+			try {
+				const fileResult = await exec(cmd[0]!, cmd.slice(1), { cwd });
+				for (const f of fileResult.stdout.trim().split("\n")) {
+					if (f.trim()) allFiles.add(f.trim());
+				}
+			} catch {
+				// skip
 			}
-		} catch {
-			// skip
+		}
+		if (allFiles.size > 0) {
+			parts.push("");
+			parts.push("## Changed files");
+			parts.push("");
+			parts.push([...allFiles].sort().join("\n"));
 		}
 	}
 

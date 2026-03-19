@@ -131,6 +131,7 @@ describe("assembleQualityContext", () => {
 			"git diff": "+added line\n-removed line",
 			"git diff --cached": "+staged change",
 			"git diff --name-only": "src/auth.ts",
+			"git diff --name-only --cached": "src/staged.ts",
 		});
 		const ctx = await assembleQualityContext(
 			baseOptions({ exec }),
@@ -138,6 +139,7 @@ describe("assembleQualityContext", () => {
 		assert.ok(ctx.includes("+added line"));
 		assert.ok(ctx.includes("+staged change"));
 		assert.ok(ctx.includes("src/auth.ts"));
+		assert.ok(ctx.includes("src/staged.ts"));
 	});
 
 	it("uses custom stop signal", async () => {

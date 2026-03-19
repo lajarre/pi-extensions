@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { join } from "node:path";
 import { promisify } from "node:util";
 import type {
 	ExtensionAPI,
@@ -321,6 +320,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 					"error",
 				);
 			}
+			lastResult = null;
 			return null;
 		} finally {
 			loopActive = false;
@@ -390,7 +390,14 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 
 				const scope = await pickScope(ctx);
 				if (!scope) return; // user cancelled
-				startQualityLoop(ctx, scope, focus).catch(() => {});
+				startQualityLoop(ctx, scope, focus).catch((err) => {
+					if (ctx.hasUI) {
+						ctx.ui.notify(
+							`Wiggum loop error: ${err instanceof Error ? err.message : String(err)}`,
+							"error",
+						);
+					}
+				});
 				return;
 			}
 
