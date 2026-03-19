@@ -1,0 +1,433 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
+import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import {
+	Container,
+	SelectList,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+	type SelectItem,
+} from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import {
+	loadSettings,
+	resolveExitScript,
+	type ExecFn,
+	type WiggumSettings,
+} from "./settings.js";
+import {
+	buildInlineAgent,
+	runWiggumLoop,
+	type WiggumWidgetState,
+} from "./engine.js";
+import { assembleQualityContext, type ReviewScope } from "./context.js";
+import type { GateConfig } from "./gate.js";
+
+const execFileAsync = promisify(execFile);
+
+// ── State ────────────────────────────────────────────────────
+
+let loopActive = false;
+let currentIteration = 0;
+let currentMax = 0;
+let currentFlow = "";
+let abortController: AbortController | null = null;
+let settings: WiggumSettings;
+
+// ── Exec adapter ─────────────────────────────────────────────
+
+function makeExec(): ExecFn {
+	return async (command, args, options) => {
+		try {
+			const result = await execFileAsync(command, args, {
+				cwd: options?.cwd,
+				timeout: options?.timeout,
+				maxBuffer: 10 * 1024 * 1024,
+			});
+			return {
+				stdout: result.stdout ?? "",
+				stderr: result.stderr ?? "",
+				code: 0,
+			};
+		} catch (err: unknown) {
+			const e = err as {
+				stdout?: string;
+				stderr?: string;
+				code?: number;
+			};
+			return {
+				stdout: e.stdout ?? "",
+				stderr: e.stderr ?? "",
+				code: typeof e.code === "number" ? e.code : 1,
+			};
+		}
+	};
+}
+
+// ── Widget ───────────────────────────────────────────────────
+
+const WIGGUM_WIDGET_KEY = "wiggum-loop";
+const MAX_LINE_WIDTH = 80;
+
+function formatDuration(ms: number): string {
+	const totalSec = Math.floor(ms / 1000);
+	if (totalSec < 60) return `${totalSec}s`;
+	const min = Math.floor(totalSec / 60);
+	const sec = totalSec % 60;
+	return sec > 0 ? `${min}m${sec}s` : `${min}m`;
+}
+
+function formatTokens(n: number): string {
+	if (n < 1000) return String(n);
+	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+	return `${Math.round(n / 1000)}k`;
+}
+
+function truncLine(text: string, maxWidth: number): string {
+	if (visibleWidth(text) <= maxWidth) return text;
+	return truncateToWidth(text, maxWidth, "…");
+}
+
+function renderWiggumWidget(
+	ctx: ExtensionContext,
+	state: WiggumWidgetState | null,
+): void {
+	if (!ctx.hasUI) return;
+	if (!state || state.phase === "done") {
+		ctx.ui.setWidget(WIGGUM_WIDGET_KEY, undefined);
+		return;
+	}
+
+	const lines: string[] = [];
+	const theme = ctx.ui.theme;
+	const iter = `${state.iteration}/${state.maxIterations}`;
+
+	if (state.phase === "agent") {
+		const elapsed = formatDuration(state.durationMs);
+		const tok = `${formatTokens(state.tokens)} tok`;
+		lines.push(truncLine(
+			theme.fg("accent", `wiggum quality ${iter}`)
+			+ ` | ${theme.fg("warning", "running")}`
+			+ ` | ${elapsed} | ${tok}`,
+			MAX_LINE_WIDTH,
+		));
+		const recent = state.recentOutput.slice(-3);
+		for (const line of recent) {
+			lines.push(truncLine(
+				theme.fg("dim", `  > ${line}`),
+				MAX_LINE_WIDTH,
+			));
+		}
+	} else {
+		// testing or gate
+		lines.push(truncLine(
+			theme.fg("accent", `wiggum quality ${iter}`)
+			+ ` | ${state.phase}`,
+			MAX_LINE_WIDTH,
+		));
+	}
+
+	ctx.ui.setWidget(WIGGUM_WIDGET_KEY, lines);
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+function updateStatus(ctx: ExtensionContext) {
+	if (!ctx.hasUI) return;
+	if (loopActive) {
+		ctx.ui.setStatus(
+			"wiggum",
+			`wiggum ${currentFlow} ${currentIteration}/${currentMax}`,
+		);
+	} else {
+		ctx.ui.setStatus("wiggum", undefined);
+	}
+}
+
+// ── Scope picker ─────────────────────────────────────────────
+
+const SCOPE_ITEMS: SelectItem[] = [
+	{ value: "uncommitted", label: "Uncommitted changes", description: "" },
+	{ value: "last-commit", label: "Last commit", description: "" },
+	{ value: "branch", label: "Branch vs main", description: "" },
+];
+
+async function pickScope(ctx: ExtensionContext): Promise<ReviewScope | null> {
+	if (!ctx.hasUI) return "uncommitted";
+
+	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
+		container.addChild(new Text(theme.fg("accent", theme.bold("Select review scope"))));
+
+		const selectList = new SelectList(SCOPE_ITEMS, SCOPE_ITEMS.length, {
+			selectedPrefix: (text: string) => theme.fg("accent", text),
+			selectedText: (text: string) => theme.fg("accent", text),
+			description: (text: string) => theme.fg("muted", text),
+		});
+
+		selectList.onSelect = (item) => done(item.value as string);
+		selectList.onCancel = () => done(null);
+
+		container.addChild(selectList);
+		container.addChild(new Text(theme.fg("dim", "Enter to confirm, Esc to cancel")));
+		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
+
+		return {
+			render(width: number) { return container.render(width); },
+			invalidate() { container.invalidate(); },
+			handleInput(data: string) { selectList.handleInput(data); tui.requestRender(); },
+		};
+	}, { overlay: true, overlayOptions: { anchor: "center", width: 50, maxHeight: "50%" } }) as Promise<ReviewScope | null>;
+}
+
+// ── Extension ────────────────────────────────────────────────
+
+export default function wiggumExtension(pi: ExtensionAPI) {
+	settings = loadSettings();
+
+	pi.on("session_start", async () => {
+		settings = loadSettings();
+		loopActive = false;
+		currentIteration = 0;
+		currentMax = 0;
+		currentFlow = "";
+		abortController = null;
+	});
+
+	async function startQualityLoop(
+		ctx: ExtensionContext,
+		scope: ReviewScope,
+		focus?: string,
+		maxOverride?: number,
+	) {
+		if (loopActive) {
+			if (ctx.hasUI) ctx.ui.notify("Wiggum loop already active", "warning");
+			return;
+		}
+
+		const max = maxOverride ?? settings.maxIterations;
+		const exec = makeExec();
+		const cwd = ctx.cwd;
+		const exitScript = resolveExitScript(settings, cwd);
+
+		const agentConfig = buildInlineAgent(settings);
+		const gateConfig: GateConfig = {
+			stopSignal: settings.stopSignal,
+			testCommand: settings.testCommand,
+			exitScript,
+		};
+
+		loopActive = true;
+		currentFlow = "quality";
+		currentMax = max;
+		currentIteration = 0;
+		abortController = new AbortController();
+		updateStatus(ctx);
+
+		if (ctx.hasUI) {
+			ctx.ui.notify(
+				`Wiggum quality loop started (scope: ${scope}, max: ${max})`,
+				"info",
+			);
+		}
+
+		try {
+			const result = await runWiggumLoop(
+				{
+					name: "quality",
+					assembleContext: (iteration) =>
+						assembleQualityContext({
+							iteration,
+							maxIterations: currentMax,
+							scope,
+							cwd,
+							exec,
+							reviewPrompt: settings.reviewPrompt,
+							focus,
+							stopSignal: settings.stopSignal,
+						}),
+					agentConfig,
+					maxIterations: currentMax,
+					gateConfig,
+				},
+				{
+					cwd,
+					exec,
+					signal: abortController.signal,
+					onIterationStart: (iter, mx) => {
+						currentIteration = iter;
+						currentMax = mx;
+						updateStatus(ctx);
+						if (ctx.hasUI) ctx.ui.notify(`Wiggum iteration ${iter}/${mx} starting...`, "info");
+					},
+					onIterationEnd: (iter, mx, reason) => {
+						currentIteration = iter;
+						currentMax = mx;
+						updateStatus(ctx);
+						if (ctx.hasUI) ctx.ui.notify(`Wiggum iteration ${iter}/${mx}: ${reason}`, "info");
+					},
+					onProgress: (state) => renderWiggumWidget(ctx, state),
+				},
+			);
+
+			const msg = result.exitReason === "clean"
+				? `Wiggum quality loop complete after ${result.iterations} iteration(s): all gates passed`
+				: result.exitReason === "stopped"
+					? `Wiggum quality loop stopped after ${result.iterations} iteration(s)`
+					: `Wiggum quality loop reached max iterations (${result.iterations})`;
+
+			if (ctx.hasUI) ctx.ui.notify(msg, "info");
+		} catch (err) {
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					`Wiggum loop error: ${err instanceof Error ? err.message : String(err)}`,
+					"error",
+				);
+			}
+		} finally {
+			loopActive = false;
+			currentIteration = 0;
+			currentFlow = "";
+			abortController = null;
+			updateStatus(ctx);
+			renderWiggumWidget(ctx, null);
+		}
+	}
+
+	// ── Commands ─────────────────────────────────────────────
+
+	pi.registerCommand("wiggum", {
+		description: "Wiggum loop: /wiggum quality [focus], /wiggum stop, /wiggum status, /wiggum max N",
+		handler: async (args, ctx) => {
+			if (!ctx.hasUI) return;
+			const parts = args.trim().split(/\s+/);
+			const subcommand = parts[0]?.toLowerCase();
+
+			if (subcommand === "stop") {
+				if (!loopActive) {
+					ctx.ui.notify("No wiggum loop active", "info");
+				} else {
+					abortController?.abort();
+					ctx.ui.notify("Wiggum loop stopping...", "info");
+				}
+				return;
+			}
+
+			if (subcommand === "status") {
+				if (loopActive) {
+					ctx.ui.notify(
+						`Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}`,
+						"info",
+					);
+				} else {
+					ctx.ui.notify(
+						`Wiggum loop inactive (max: ${settings.maxIterations})`,
+						"info",
+					);
+				}
+				return;
+			}
+
+			if (subcommand === "max") {
+				const n = parseInt(parts[1] ?? "", 10);
+				if (isNaN(n) || n < 1) {
+					ctx.ui.notify("Usage: /wiggum max <number>", "error");
+					return;
+				}
+				settings.maxIterations = n;
+				if (loopActive) currentMax = n;
+				ctx.ui.notify(`Max iterations set to ${n}`, "info");
+				updateStatus(ctx);
+				return;
+			}
+
+			if (subcommand === "quality") {
+				const focus = parts.slice(1).join(" ").trim() || undefined;
+
+				const scope = await pickScope(ctx);
+				if (!scope) return; // user cancelled
+				startQualityLoop(ctx, scope, focus).catch(() => {});
+				return;
+			}
+
+			ctx.ui.notify(
+				"Usage: /wiggum quality [focus] | stop | status | max N",
+				"error",
+			);
+		},
+	});
+
+	// ── Tool ─────────────────────────────────────────────────
+
+	pi.registerTool({
+		name: "wiggum_loop",
+		description:
+			"Run a wiggum (ralph) loop — fresh-agent iterations until "
+			+ "exit gate passes. Supports quality review flow.",
+		parameters: Type.Object({
+			flow: Type.String({
+				description: 'Flow type: "quality"',
+			}),
+			start: Type.Optional(Type.Boolean({
+				description: "Start the loop",
+			})),
+			stop: Type.Optional(Type.Boolean({
+				description: "Stop the loop",
+			})),
+			scope: Type.Optional(Type.String({
+				description:
+					'"uncommitted" | "last-commit" | "branch" | freeform text',
+			})),
+			focus: Type.Optional(Type.String({
+				description: "Additional review focus text",
+			})),
+			maxIterations: Type.Optional(Type.Number({
+				description: "Override max iterations",
+				minimum: 1,
+			})),
+		}),
+
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			if (params.stop) {
+				if (!loopActive) {
+					return {
+						content: [{ type: "text", text: "No wiggum loop active" }],
+					};
+				}
+				abortController?.abort();
+				return {
+					content: [{ type: "text", text: "Wiggum loop stopping..." }],
+				};
+			}
+
+			if (params.start && params.flow === "quality") {
+				const scope: ReviewScope = (params.scope as ReviewScope) || "uncommitted";
+				// fire and forget — loop runs in background
+				startQualityLoop(ctx, scope, params.focus, params.maxIterations)
+					.catch(() => {});
+				return {
+					content: [{
+						type: "text",
+						text: `Wiggum quality loop started (scope: ${scope})`,
+					}],
+				};
+			}
+
+			// status
+			return {
+				content: [{
+					type: "text",
+					text: loopActive
+						? `Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}`
+						: `Wiggum loop inactive (max: ${settings.maxIterations})`,
+				}],
+			};
+		},
+	});
+}
