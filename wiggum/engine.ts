@@ -42,6 +42,8 @@ export interface LoopOptions {
 	exec: ExecFn;
 	logFile?: string;
 	signal?: AbortSignal;
+	/** Dynamic max — checked each iteration so /wiggum max N works mid-loop */
+	getMaxIterations?: () => number;
 	onIterationStart?: (iteration: number, max: number) => void;
 	onIterationEnd?: (
 		iteration: number,
@@ -118,7 +120,10 @@ export async function runWiggumLoop(
 		try { writeFileSync(options.logFile, ""); } catch {}
 	}
 
-	for (let i = 1; i <= flow.maxIterations; i++) {
+	for (let i = 1; ; i++) {
+		const max = options.getMaxIterations?.() ?? flow.maxIterations;
+		if (i > max) break;
+
 		// check abort
 		if (signal?.aborted) {
 			writeLogLine(options.logFile, {
@@ -131,7 +136,7 @@ export async function runWiggumLoop(
 		}
 
 		const iterationStart = Date.now();
-		options.onIterationStart?.(i, flow.maxIterations);
+		options.onIterationStart?.(i, max);
 
 		// 1. assemble context
 		let task: string;
@@ -139,10 +144,10 @@ export async function runWiggumLoop(
 			task = await flow.assembleContext(i);
 		} catch (err) {
 			lastOutput = err instanceof Error ? err.message : String(err);
-			options.onIterationEnd?.(i, flow.maxIterations, `context error: ${lastOutput}`);
+			options.onIterationEnd?.(i, max, `context error: ${lastOutput}`);
 			writeLogLine(options.logFile, {
 				iteration: i,
-				maxIterations: flow.maxIterations,
+				maxIterations: max,
 				durationMs: Date.now() - iterationStart,
 				error: `context error: ${lastOutput}`,
 			});
@@ -181,7 +186,7 @@ export async function runWiggumLoop(
 							lastDurationMs = p.durationMs || 0;
 							options.onProgress!({
 								iteration: i,
-								maxIterations: flow.maxIterations,
+								maxIterations: max,
 								phase: "agent",
 								agentName: flow.agentConfig.name,
 								currentTool: p.currentTool,
@@ -195,10 +200,10 @@ export async function runWiggumLoop(
 			);
 		} catch (err) {
 			lastOutput = err instanceof Error ? err.message : String(err);
-			options.onIterationEnd?.(i, flow.maxIterations, `agent error: ${lastOutput}`);
+			options.onIterationEnd?.(i, max, `agent error: ${lastOutput}`);
 			writeLogLine(options.logFile, {
 				iteration: i,
-				maxIterations: flow.maxIterations,
+				maxIterations: max,
 				durationMs: Date.now() - iterationStart,
 				error: `agent error: ${lastOutput}`,
 			});
@@ -222,7 +227,7 @@ export async function runWiggumLoop(
 		// 3. evaluate gate
 		options.onProgress?.({
 			iteration: i,
-			maxIterations: flow.maxIterations,
+			maxIterations: max,
 			phase: "testing",
 			agentName: flow.agentConfig.name,
 			recentOutput: [],
@@ -237,11 +242,11 @@ export async function runWiggumLoop(
 			exec,
 		);
 
-		options.onIterationEnd?.(i, flow.maxIterations, gate.reason);
+		options.onIterationEnd?.(i, max, gate.reason);
 
 		writeLogLine(options.logFile, {
 			iteration: i,
-			maxIterations: flow.maxIterations,
+			maxIterations: max,
 			durationMs: Date.now() - iterationStart,
 			gateResult: { shouldStop: gate.shouldStop, reason: gate.reason },
 			agentSignal: shouldStop(lastOutput, flow.gateConfig.stopSignal),
@@ -258,14 +263,15 @@ export async function runWiggumLoop(
 		}
 	}
 
+	const finalMax = options.getMaxIterations?.() ?? flow.maxIterations;
 	writeLogLine(options.logFile, {
 		type: "summary",
-		iterations: flow.maxIterations,
+		iterations: finalMax,
 		exitReason: "max-iterations",
 		totalDurationMs: Date.now() - loopStart,
 	});
 	return {
-		iterations: flow.maxIterations,
+		iterations: finalMax,
 		exitReason: "max-iterations",
 		lastOutput,
 	};

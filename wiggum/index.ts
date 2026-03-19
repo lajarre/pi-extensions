@@ -288,15 +288,14 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 					exec,
 					logFile,
 					signal: abortController.signal,
+					getMaxIterations: () => currentMax,
 					onIterationStart: (iter, mx) => {
 						currentIteration = iter;
-						currentMax = mx;
 						updateStatus(ctx);
 						if (ctx.hasUI) ctx.ui.notify(`Wiggum iteration ${iter}/${mx} starting...`, "info");
 					},
 					onIterationEnd: (iter, mx, reason) => {
 						currentIteration = iter;
-						currentMax = mx;
 						updateStatus(ctx);
 						if (ctx.hasUI) ctx.ui.notify(`Wiggum iteration ${iter}/${mx}: ${reason}`, "info");
 					},
