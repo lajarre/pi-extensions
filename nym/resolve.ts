@@ -19,6 +19,7 @@ export type ExecFn = (
 
 /** Segment caps per spec. */
 export const SEGMENT_CAPS = {
+	area: 12,
 	project: 12,
 	worktree: 12,
 	branch: 12,
@@ -106,14 +107,37 @@ export function extractRepoName(remoteUrl: string): string | null {
 }
 
 /**
+ * Resolve area segment from AREA_SLUG env var (set by mise).
+ *
+ * Returns null if not set. This is the workspace area
+ * (e.g. "aidev", "infra", "biz") from ~/workspace/<area>/.mise.toml.
+ */
+export function resolveArea(): string | null {
+	const slug = process.env.AREA_SLUG?.trim();
+	if (!slug) return null;
+	return truncateSegment(slug, SEGMENT_CAPS.area);
+}
+
+/**
  * Resolve project segment.
  *
  * Strategy:
  * 1) git remote get-url origin -> repo name
  * 2) walk upward for project.org / area.org (stop before homedir)
  * 3) cwd basename fallback
+ *
+ * If the result matches the area slug, returns null to avoid
+ * duplication (e.g. area="aidev" + project="aidev" → just "aidev").
  */
 export async function resolveProject(cwd: string, exec: ExecFn): Promise<string | null> {
+	const area = resolveArea();
+
+	function dedup(name: string | null): string | null {
+		// Skip if project name matches area slug (avoid "aidev:aidev").
+		if (name && area && name === area) return null;
+		return name;
+	}
+
 	try {
 		const result = await exec("git", ["remote", "get-url", "origin"], {
 			cwd,
@@ -122,7 +146,7 @@ export async function resolveProject(cwd: string, exec: ExecFn): Promise<string 
 
 		if (result.exitCode === 0) {
 			const repo = extractRepoName(result.stdout);
-			if (repo) return truncateSegment(repo, SEGMENT_CAPS.project);
+			if (repo) return dedup(truncateSegment(repo, SEGMENT_CAPS.project));
 		}
 	} catch {
 		// fall through
@@ -133,7 +157,7 @@ export async function resolveProject(cwd: string, exec: ExecFn): Promise<string 
 
 	while (dir !== "/" && dir !== home) {
 		if (existsSync(pathResolve(dir, "project.org")) || existsSync(pathResolve(dir, "area.org"))) {
-			return truncateSegment(basename(dir), SEGMENT_CAPS.project);
+			return dedup(truncateSegment(basename(dir), SEGMENT_CAPS.project));
 		}
 
 		const parent = dirname(dir);
@@ -142,7 +166,7 @@ export async function resolveProject(cwd: string, exec: ExecFn): Promise<string 
 	}
 
 	const fallback = basename(pathResolve(cwd));
-	return fallback ? truncateSegment(fallback, SEGMENT_CAPS.project) : null;
+	return fallback ? dedup(truncateSegment(fallback, SEGMENT_CAPS.project)) : null;
 }
 
 /** Resolve worktree segment from linked worktree metadata. */
@@ -297,6 +321,7 @@ export async function structuredName(
 	context: string,
 	llm: DescriptionLLMFn,
 ): Promise<string> {
+	const area = resolveArea();
 	const worktree = await detectWorktree(cwd, exec);
 	const worktreeName = resolveWorktreeName(worktree);
 
@@ -308,5 +333,5 @@ export async function structuredName(
 		resolveDescription(context, llm),
 	]);
 
-	return assembleSegments([project, worktreeName, branch, pr, subfolder, description]);
+	return assembleSegments([area, project, worktreeName, branch, pr, subfolder, description]);
 }

@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import {
 	assembleSegments,
 	detectWorktree,
@@ -25,7 +25,16 @@ import {
 	structuredName,
 	truncateSegment,
 	type WorktreeInfo,
+	resolveArea,
 } from "../resolve.js";
+
+// ─── Isolate from mise env (AREA_SLUG etc.) ──────────────────────────────────
+
+const savedAreaSlug = process.env.AREA_SLUG;
+delete process.env.AREA_SLUG;
+after(() => {
+	if (savedAreaSlug !== undefined) process.env.AREA_SLUG = savedAreaSlug;
+});
 
 // ─── Minimal Mock Harness ────────────────────────────────────────────────────
 
@@ -638,6 +647,31 @@ describe("extractRepoName", () => {
 	});
 });
 
+describe("resolveArea", () => {
+	it("should return AREA_SLUG when set", () => {
+		process.env.AREA_SLUG = "aidev";
+		assert.equal(resolveArea(), "aidev");
+		delete process.env.AREA_SLUG;
+	});
+
+	it("should return null when not set", () => {
+		delete process.env.AREA_SLUG;
+		assert.equal(resolveArea(), null);
+	});
+
+	it("should truncate long area slugs", () => {
+		process.env.AREA_SLUG = "very-long-area-name";
+		assert.equal(resolveArea(), "very-long-ar…");
+		delete process.env.AREA_SLUG;
+	});
+
+	it("should handle empty string", () => {
+		process.env.AREA_SLUG = "";
+		assert.equal(resolveArea(), null);
+		delete process.env.AREA_SLUG;
+	});
+});
+
 describe("resolveProject", () => {
 	it("should extract repo name from git remote", async () => {
 		const exec: ExecFn = async (cmd, args) => {
@@ -1031,6 +1065,48 @@ describe("structuredName", () => {
 
 		const result = await structuredName("/no-git", exec, "", llm);
 		assert.equal(result, "no-git");
+	});
+
+	it("should prepend area when AREA_SLUG is set", async () => {
+		process.env.AREA_SLUG = "aidev";
+		try {
+			const exec: ExecFn = async (cmd, args) => {
+				if (cmd === "git" && args.includes("get-url")) {
+					return { stdout: "git@github.com:org/myrepo.git\n", stderr: "", exitCode: 0 };
+				}
+				if (args.includes("--show-toplevel")) {
+					return { stdout: "/repo\n", stderr: "", exitCode: 0 };
+				}
+				if (args.includes("--git-common-dir")) {
+					return { stdout: ".git\n", stderr: "", exitCode: 0 };
+				}
+				if (args.includes("--show-current")) {
+					return { stdout: "main\n", stderr: "", exitCode: 0 };
+				}
+				if (cmd === "gh") {
+					return { stdout: "", stderr: "no PR", exitCode: 1 };
+				}
+				return { stdout: "", stderr: "", exitCode: 1 };
+			};
+			const llm = async () => "debug-cache";
+			const result = await structuredName("/repo", exec, "context", llm);
+			assert.equal(result, "aidev:myrepo:debug-cache");
+		} finally {
+			delete process.env.AREA_SLUG;
+		}
+	});
+
+	it("should dedup area and project when they match", async () => {
+		process.env.AREA_SLUG = "aidev";
+		try {
+			const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+			const llm = async () => "session-review";
+			const result = await structuredName("/home/user/aidev", exec, "context", llm);
+			// project would be "aidev" (basename) which matches area — deduped
+			assert.equal(result, "aidev:session-review");
+		} finally {
+			delete process.env.AREA_SLUG;
+		}
 	});
 
 	it("should include subfolder when in subdirectory", async () => {
