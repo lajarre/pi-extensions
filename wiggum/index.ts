@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type {
 	ExtensionAPI,
@@ -23,6 +24,7 @@ import {
 import {
 	buildInlineAgent,
 	runWiggumLoop,
+	type LoopResult,
 	type WiggumWidgetState,
 } from "./engine.js";
 import { assembleQualityContext, type ReviewScope } from "./context.js";
@@ -38,6 +40,7 @@ let currentMax = 0;
 let currentFlow = "";
 let abortController: AbortController | null = null;
 let settings: WiggumSettings;
+let lastResult: LoopResult | null = null;
 
 // ── Exec adapter ─────────────────────────────────────────────
 
@@ -198,6 +201,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 		currentMax = 0;
 		currentFlow = "";
 		abortController = null;
+		lastResult = null;
 	});
 
 	async function startQualityLoop(
@@ -205,16 +209,17 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 		scope: ReviewScope,
 		focus?: string,
 		maxOverride?: number,
-	) {
+	): Promise<LoopResult | null> {
 		if (loopActive) {
 			if (ctx.hasUI) ctx.ui.notify("Wiggum loop already active", "warning");
-			return;
+			return null;
 		}
 
 		const max = maxOverride ?? settings.maxIterations;
 		const exec = makeExec();
 		const cwd = ctx.cwd;
 		const exitScript = resolveExitScript(settings, cwd);
+		const logFile = join(cwd, settings.logFile);
 
 		const agentConfig = buildInlineAgent(settings);
 		const gateConfig: GateConfig = {
@@ -259,6 +264,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				{
 					cwd,
 					exec,
+					logFile,
 					signal: abortController.signal,
 					onIterationStart: (iter, mx) => {
 						currentIteration = iter;
@@ -283,6 +289,8 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 					: `Wiggum quality loop reached max iterations (${result.iterations})`;
 
 			if (ctx.hasUI) ctx.ui.notify(msg, "info");
+			lastResult = result;
+			return result;
 		} catch (err) {
 			if (ctx.hasUI) {
 				ctx.ui.notify(
@@ -290,6 +298,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 					"error",
 				);
 			}
+			return null;
 		} finally {
 			loopActive = false;
 			currentIteration = 0;
@@ -323,6 +332,11 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				if (loopActive) {
 					ctx.ui.notify(
 						`Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}`,
+						"info",
+					);
+				} else if (lastResult) {
+					ctx.ui.notify(
+						`Wiggum loop inactive. Last run: ${lastResult.iterations} iteration(s), exit: ${lastResult.exitReason}`,
 						"info",
 					);
 				} else {
@@ -408,24 +422,30 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 
 			if (params.start && params.flow === "quality") {
 				const scope: ReviewScope = (params.scope as ReviewScope) || "uncommitted";
-				// fire and forget — loop runs in background
-				startQualityLoop(ctx, scope, params.focus, params.maxIterations)
-					.catch(() => {});
+				const result = await startQualityLoop(ctx, scope, params.focus, params.maxIterations);
+				const logFile = join(ctx.cwd, settings.logFile);
 				return {
 					content: [{
 						type: "text",
-						text: `Wiggum quality loop started (scope: ${scope})`,
+						text: JSON.stringify({
+							iterations: result?.iterations ?? 0,
+							exitReason: result?.exitReason ?? "error",
+							logFile,
+						}),
 					}],
 				};
 			}
 
 			// status
+			const statusText = loopActive
+				? `Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}`
+				: lastResult
+					? `Wiggum loop inactive. Last run: ${lastResult.iterations} iteration(s), exit: ${lastResult.exitReason}`
+					: `Wiggum loop inactive (max: ${settings.maxIterations})`;
 			return {
 				content: [{
 					type: "text",
-					text: loopActive
-						? `Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}`
-						: `Wiggum loop inactive (max: ${settings.maxIterations})`,
+					text: statusText,
 				}],
 			};
 		},

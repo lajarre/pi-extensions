@@ -1,3 +1,4 @@
+import { appendFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { runSync } from "../../pi-subagents/execution.js";
 import type {
@@ -5,7 +6,7 @@ import type {
 	AgentSource,
 } from "../../pi-subagents/agents.js";
 import type { SingleResult } from "../../pi-subagents/types.js";
-import { evaluateGate, type GateConfig } from "./gate.js";
+import { evaluateGate, shouldStop, type GateConfig } from "./gate.js";
 import type { ExecFn, WiggumSettings } from "./settings.js";
 import { DEFAULT_WIGGUM_REVIEW_PROMPT } from "./settings.js";
 
@@ -39,6 +40,7 @@ export interface WiggumWidgetState {
 export interface LoopOptions {
 	cwd: string;
 	exec: ExecFn;
+	logFile?: string;
 	signal?: AbortSignal;
 	onIterationStart?: (iteration: number, max: number) => void;
 	onIterationEnd?: (
@@ -47,6 +49,13 @@ export interface LoopOptions {
 		gateReason: string,
 	) => void;
 	onProgress?: (state: WiggumWidgetState) => void;
+}
+
+function writeLogLine(logFile: string | undefined, data: Record<string, unknown>): void {
+	if (!logFile) return;
+	try {
+		appendFileSync(logFile, JSON.stringify(data) + "\n");
+	} catch {}
 }
 
 // ── Agent construction ───────────────────────────────────────
@@ -101,15 +110,27 @@ export async function runWiggumLoop(
 	options: LoopOptions,
 ): Promise<LoopResult> {
 	const { cwd, exec, signal } = options;
+	const loopStart = Date.now();
 	let lastOutput = "";
 	let consecutiveErrors = 0;
+
+	if (options.logFile) {
+		try { writeFileSync(options.logFile, ""); } catch {}
+	}
 
 	for (let i = 1; i <= flow.maxIterations; i++) {
 		// check abort
 		if (signal?.aborted) {
+			writeLogLine(options.logFile, {
+				type: "summary",
+				iterations: i - 1,
+				exitReason: "stopped",
+				totalDurationMs: Date.now() - loopStart,
+			});
 			return { iterations: i - 1, exitReason: "stopped", lastOutput };
 		}
 
+		const iterationStart = Date.now();
 		options.onIterationStart?.(i, flow.maxIterations);
 
 		// 1. assemble context
@@ -121,6 +142,12 @@ export async function runWiggumLoop(
 			options.onIterationEnd?.(i, flow.maxIterations, `context error: ${lastOutput}`);
 			consecutiveErrors++;
 			if (consecutiveErrors >= 3) {
+				writeLogLine(options.logFile, {
+					type: "summary",
+					iterations: i,
+					exitReason: "error",
+					totalDurationMs: Date.now() - loopStart,
+				});
 				return { iterations: i, exitReason: "error", lastOutput };
 			}
 			continue;
@@ -165,6 +192,12 @@ export async function runWiggumLoop(
 			options.onIterationEnd?.(i, flow.maxIterations, `agent error: ${lastOutput}`);
 			consecutiveErrors++;
 			if (consecutiveErrors >= 3) {
+				writeLogLine(options.logFile, {
+					type: "summary",
+					iterations: i,
+					exitReason: "error",
+					totalDurationMs: Date.now() - loopStart,
+				});
 				return { iterations: i, exitReason: "error", lastOutput };
 			}
 			continue;
@@ -194,11 +227,31 @@ export async function runWiggumLoop(
 
 		options.onIterationEnd?.(i, flow.maxIterations, gate.reason);
 
+		writeLogLine(options.logFile, {
+			iteration: i,
+			maxIterations: flow.maxIterations,
+			durationMs: Date.now() - iterationStart,
+			gateResult: { shouldStop: gate.shouldStop, reason: gate.reason },
+			agentSignal: shouldStop(lastOutput, flow.gateConfig.stopSignal),
+		});
+
 		if (gate.shouldStop) {
+			writeLogLine(options.logFile, {
+				type: "summary",
+				iterations: i,
+				exitReason: "clean",
+				totalDurationMs: Date.now() - loopStart,
+			});
 			return { iterations: i, exitReason: "clean", lastOutput };
 		}
 	}
 
+	writeLogLine(options.logFile, {
+		type: "summary",
+		iterations: flow.maxIterations,
+		exitReason: "max-iterations",
+		totalDurationMs: Date.now() - loopStart,
+	});
 	return {
 		iterations: flow.maxIterations,
 		exitReason: "max-iterations",
