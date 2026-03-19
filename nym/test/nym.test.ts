@@ -673,6 +673,30 @@ describe("resolveArea", () => {
 });
 
 describe("resolveProject", () => {
+	it("should use PROJECT_SLUG when set", async () => {
+		process.env.PROJECT_SLUG = "my-proj";
+		try {
+			const exec: ExecFn = async () => ({ stdout: "git@github.com:org/other.git\n", stderr: "", exitCode: 0 });
+			const result = await resolveProject("/some/repo", exec);
+			assert.equal(result, "my-proj");
+		} finally {
+			delete process.env.PROJECT_SLUG;
+		}
+	});
+
+	it("should dedup PROJECT_SLUG against AREA_SLUG", async () => {
+		process.env.AREA_SLUG = "aidev";
+		process.env.PROJECT_SLUG = "aidev";
+		try {
+			const exec: ExecFn = async () => ({ stdout: "", stderr: "", exitCode: 1 });
+			const result = await resolveProject("/some/path", exec);
+			assert.equal(result, null);
+		} finally {
+			delete process.env.AREA_SLUG;
+			delete process.env.PROJECT_SLUG;
+		}
+	});
+
 	it("should extract repo name from git remote", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("get-url")) {

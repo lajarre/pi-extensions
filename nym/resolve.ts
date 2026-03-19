@@ -1,6 +1,4 @@
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, relative, resolve as pathResolve } from "node:path";
+import { basename, relative, resolve as pathResolve } from "node:path";
 
 /**
  * Segment resolvers for structured session naming.
@@ -122,8 +120,8 @@ export function resolveArea(): string | null {
  * Resolve project segment.
  *
  * Strategy:
- * 1) git remote get-url origin -> repo name
- * 2) walk upward for project.org / area.org (stop before homedir)
+ * 1) PROJECT_SLUG env var (set by mise per-project)
+ * 2) git remote get-url origin → repo name
  * 3) cwd basename fallback
  *
  * If the result matches the area slug, returns null to avoid
@@ -133,10 +131,12 @@ export async function resolveProject(cwd: string, exec: ExecFn): Promise<string 
 	const area = resolveArea();
 
 	function dedup(name: string | null): string | null {
-		// Skip if project name matches area slug (avoid "aidev:aidev").
 		if (name && area && name === area) return null;
 		return name;
 	}
+
+	const slug = process.env.PROJECT_SLUG?.trim();
+	if (slug) return dedup(truncateSegment(slug, SEGMENT_CAPS.project));
 
 	try {
 		const result = await exec("git", ["remote", "get-url", "origin"], {
@@ -150,19 +150,6 @@ export async function resolveProject(cwd: string, exec: ExecFn): Promise<string 
 		}
 	} catch {
 		// fall through
-	}
-
-	const home = pathResolve(homedir());
-	let dir = pathResolve(cwd);
-
-	while (dir !== "/" && dir !== home) {
-		if (existsSync(pathResolve(dir, "project.org")) || existsSync(pathResolve(dir, "area.org"))) {
-			return dedup(truncateSegment(basename(dir), SEGMENT_CAPS.project));
-		}
-
-		const parent = dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 
 	const fallback = basename(pathResolve(cwd));
