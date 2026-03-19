@@ -117,7 +117,14 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			ctx.ui.setStatus("condense", "✦ condensing…");
+			const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+			let frame = 0;
+			const spin = setInterval(() => {
+				ctx.ui.setStatus(
+					"condense",
+					`${frames[frame++ % frames.length]} condensing…`,
+				);
+			}, 80);
 
 			try {
 				const candidates =
@@ -145,6 +152,7 @@ export default function (pi: ExtensionAPI) {
 					"error",
 				);
 			} finally {
+				clearInterval(spin);
 				ctx.ui.setStatus("condense", undefined);
 			}
 		},
