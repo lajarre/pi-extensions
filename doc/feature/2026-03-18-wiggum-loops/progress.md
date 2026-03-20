@@ -53,8 +53,14 @@ all 11.
 |-----|-----------|-------------|-------------|
 | V1 no guidelines | 3/11 | — | diff-only, generic prompt |
 | V1.1 passive | 5/11 | — | "flag issues" language |
-| V1.1 prescriptive | **11/11** | 3 better, **4 worse** | "you MUST fix", aggressive |
-| V1.2 w/ constraints | **11/11** | 3 better, **2 worse** | + "do NOT change" section |
+| V1.1 prescriptive (run 3) | **11/11** | 3 better, **4 worse** | "you MUST fix", aggressive |
+| V1.2 w/ constraints (run 4) | **11/11** | 0 better, **5 worse** | + "do NOT change" section |
+
+Run 4 was WORSE than run 3 on design quality despite the
+constraints. The "do NOT change" framing fixed 2 over-corrections
+(created_at_ms, ExitCode) but dampened the agent's aggressiveness,
+losing wins on notes parsing, persistence hardening, and CLI
+completeness. Net: traded 2 fixes for 3 regressions.
 
 Comparison vs manual reference (verified by cf2ebc33):
 
@@ -125,23 +131,32 @@ important as directing it. Future guidelines template should
 include: "Do not change the public API/data schema unless
 explicitly listed above."
 
-After adding scope constraints (V1.2): **11/11 on checklist,
-2 reference-better (down from 4).** Fixed: created_at_ms now
-preserved, ExitCode used. Remaining: ReminderTask still removed
-(fix directive conflicted with constraint), demo still inlined.
+After adding scope constraints (V1.2, run 4): **11/11 on
+checklist, but 0 wiggum-better and 5 reference-better** — worse
+than run 3 (which had 3 wiggum-better, 4 reference-better).
 
-### 2a. Fix directives override constraints
+The "do NOT change" section fixed created_at_ms and ExitCode
+but made the agent too conservative: notes parsing regressed
+(no `--`, no duplicate rejection), persistence lost parent-dir
+creation, and CLI still falls through to Demo on empty argv.
 
-When a checklist item says "fix graceful shutdown" and a
-constraint says "keep ReminderTask", the agent prioritizes the
-fix. It restructured shutdown from watch→oneshot, which
-necessarily removed the struct. The constraint was there, named
-the type explicitly, and was ignored.
+### 2a. Constraints are a blunt instrument
 
-**Implication:** generic "do not remove public types" constraints
-lose to specific "fix X" directives. To fully prevent this,
-constraints must be wired into the fix items themselves: "fix
-graceful shutdown WHILE preserving ReminderTask."
+Adding "do NOT change" constraints is a double-edged sword.
+They prevent over-correction but also dampen the beneficial
+aggressiveness that produces wins like run 3's persistence
+hardening and notes handling.
+
+**The fundamental tension:** you can't tell an agent "be
+aggressive on the checklist but conservative on everything
+else" with generic instructions. The agent reads the tone,
+not the boundary.
+
+**Implication:** the best result may be run 3's aggressive
+prompt with more specific checklist items that include their
+own constraints inline: "fix graceful shutdown by switching
+from abort() to cooperative channel, while preserving the
+ReminderTask public type."
 
 ### 3. Fresh eyes catch bugs in fixes
 
