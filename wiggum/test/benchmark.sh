@@ -23,7 +23,7 @@ info "workdir: $WORKDIR"
 info "cloning template repo"
 git clone "$TEMPLATE_REPO" "$WORKDIR/run" --quiet
 
-info "writing doc/review-guidelines.md"
+info "writing doc/review-guidelines.md (committed)"
 mkdir -p "$WORKDIR/run/doc"
 cat > "$WORKDIR/run/doc/review-guidelines.md" << 'GUIDELINES_EOF'
 # Review Guidelines
@@ -87,6 +87,8 @@ Tag each finding:
     exercise for reminder behavior, no check for ordering
     semantics, and no ctrl-c/watch test.
 GUIDELINES_EOF
+(cd "$WORKDIR/run" && git add doc/review-guidelines.md && \
+  git commit -m "add review guidelines" --quiet)
 
 info "verifying fixture is broken"
 FIXTURE_OK=true
@@ -114,32 +116,23 @@ info "phase 2 — running wiggum"
 PI_PROMPT="Use the wiggum_loop tool to start a quality review loop with scope 'uncommitted'. Max iterations 15. Wait for it to complete. When done, report the full LoopResult JSON and read the wiggum log file."
 
 info "launching pi (this may take a while)…"
-pi -p --no-session \
+(cd "$WORKDIR/run" && pi -p --no-session \
   "$PI_PROMPT" \
-  > "$WORKDIR/wiggum-output.txt" 2>&1 \
+  > "$WORKDIR/wiggum-output.txt" 2>&1) \
   || true
 
 info "pi finished, output saved to wiggum-output.txt"
 
-# try to grab the most recent wiggum log
-WIGGUM_LOG="$(find ~/.pi/agent/sessions -name 'wiggum-log.jsonl' \
-  -newer "$WORKDIR/wiggum-output.txt" -o \
+# grab the most recent wiggum log (--no-session → /tmp fallback)
+WIGGUM_LOG="$(find /tmp ~/.pi/agent/sessions \
   -name 'wiggum-log.jsonl' 2>/dev/null \
   | xargs ls -t 2>/dev/null | head -1 || true)"
 
 if [ -n "$WIGGUM_LOG" ]; then
   cp "$WIGGUM_LOG" "$WORKDIR/wiggum-log.jsonl"
-  info "copied wiggum log"
+  info "copied wiggum log: $WIGGUM_LOG"
 else
-  # fallback: grab the most recent one period
-  WIGGUM_LOG="$(find ~/.pi/agent/sessions -name 'wiggum-log.jsonl' \
-    2>/dev/null | xargs ls -t 2>/dev/null | head -1 || true)"
-  if [ -n "$WIGGUM_LOG" ]; then
-    cp "$WIGGUM_LOG" "$WORKDIR/wiggum-log.jsonl"
-    info "copied wiggum log (fallback: most recent)"
-  else
-    info "warning: wiggum-log.jsonl not found"
-  fi
+  info "warning: wiggum-log.jsonl not found"
 fi
 
 # ── phase 3: verification ───────────────────────────────────────
