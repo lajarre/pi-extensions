@@ -56,11 +56,14 @@ all 11.
 | V1.1 prescriptive (run 3) | **11/11** | 3 better, **4 worse** | "you MUST fix", aggressive |
 | V1.2 w/ constraints (run 4) | **11/11** | 0 better, **5 worse** | + "do NOT change" section |
 
-Run 4 was WORSE than run 3 on design quality despite the
-constraints. The "do NOT change" framing fixed 2 over-corrections
-(created_at_ms, ExitCode) but dampened the agent's aggressiveness,
-losing wins on notes parsing, persistence hardening, and CLI
-completeness. Net: traded 2 fixes for 3 regressions.
+cf2ebc33's corrected assessment: run 4 is "materially better
+than run 3" despite 0 wiggum-better categories. The constraints
+eliminated over-correction (created_at_ms, ExitCode, dead state,
+helper extraction), producing a cleaner codebase even though
+the raw "better" count dropped. Reference still wins 6
+categories, but the losses are now legitimate gaps (ReminderTask,
+note parsing, parent-dir creation) rather than self-inflicted
+regressions.
 
 Comparison vs manual reference (verified by cf2ebc33):
 
@@ -147,16 +150,22 @@ They prevent over-correction but also dampen the beneficial
 aggressiveness that produces wins like run 3's persistence
 hardening and notes handling.
 
-**The fundamental tension:** you can't tell an agent "be
-aggressive on the checklist but conservative on everything
-else" with generic instructions. The agent reads the tone,
-not the boundary.
+**But:** cf2ebc33 judges run 4 as materially better overall.
+The raw "wiggum better" count is misleading — run 3's wins
+(persistence, notes) came with self-inflicted regressions
+(schema removal, API churn) that run 4 avoids. Fewer wins
+but also fewer wounds.
 
-**Implication:** the best result may be run 3's aggressive
-prompt with more specific checklist items that include their
-own constraints inline: "fix graceful shutdown by switching
-from abort() to cooperative channel, while preserving the
-ReminderTask public type."
+**The remaining 6 reference-better categories** split into:
+- 4 legitimate gaps (ReminderTask, note parsing, parent-dir,
+  explicit-command) — need more specific checklist items
+- 2 style preferences (demo helper, CLI structure) — arguably
+  acceptable variation
+
+**Implication:** inline constraints per checklist item would
+close the remaining gaps: "fix graceful shutdown WHILE
+preserving ReminderTask", "add --note with --, duplicate
+rejection, blank normalization", etc.
 
 ### 3. Fresh eyes catch bugs in fixes
 
