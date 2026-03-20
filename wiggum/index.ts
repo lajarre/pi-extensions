@@ -44,6 +44,7 @@ let abortController: AbortController | null = null;
 let settings: WiggumSettings;
 let lastResult: LoopResult | null = null;
 let lastLogFile: string | null = null;
+let activeSpec: string | null = null;
 
 // ── Log file resolution ──────────────────────────────────────
 
@@ -90,6 +91,21 @@ function makeExec(): ExecFn {
 			};
 		}
 	};
+}
+
+// ── Guidelines path resolution ───────────────────────────────
+
+async function resolveGuidelinesPath(
+	cwd: string,
+	exec: ExecFn,
+): Promise<string> {
+	const result = await exec(
+		"git", ["rev-parse", "--show-toplevel"], { cwd },
+	);
+	if (result.code === 0 && result.stdout.trim()) {
+		return path.join(result.stdout.trim(), "doc", "review-guidelines.md");
+	}
+	return path.join(cwd, "doc", "review-guidelines.md");
 }
 
 // ── Widget ───────────────────────────────────────────────────
@@ -223,6 +239,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 		abortController = null;
 		lastResult = null;
 		lastLogFile = null;
+		activeSpec = null;
 	});
 
 	async function startQualityLoop(

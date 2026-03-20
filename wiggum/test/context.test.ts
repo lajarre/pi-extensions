@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, it } from "node:test";
 import {
 	assembleQualityContext,
 	buildStopSignalBlock,
 	getDiffCommands,
 	isFreeform,
+	loadProjectGuidelines,
 	type ContextOptions,
 } from "../context.js";
 import type { ExecFn } from "../settings.js";
@@ -148,5 +152,131 @@ describe("assembleQualityContext", () => {
 		);
 		assert.ok(ctx.includes("MY_SIGNAL"));
 		assert.ok(!ctx.includes("WIGGUM_STOP"));
+	});
+
+	it("includes guidelines section when provided", async () => {
+		const ctx = await assembleQualityContext(
+			baseOptions({ guidelinesContent: "Check error handling" }),
+		);
+		assert.ok(ctx.includes("## Guidelines"));
+		assert.ok(ctx.includes("Check error handling"));
+	});
+
+	it("omits guidelines section when undefined", async () => {
+		const ctx = await assembleQualityContext(baseOptions());
+		assert.ok(!ctx.includes("## Guidelines"));
+	});
+
+	it("omits guidelines section when empty string", async () => {
+		const ctx = await assembleQualityContext(
+			baseOptions({ guidelinesContent: "" }),
+		);
+		assert.ok(!ctx.includes("## Guidelines"));
+	});
+
+	it("includes guidelines content verbatim", async () => {
+		const content = "- Check API coherence\n- No dead code";
+		const ctx = await assembleQualityContext(
+			baseOptions({ guidelinesContent: content }),
+		);
+		assert.ok(ctx.includes(content));
+	});
+});
+
+// ── loadProjectGuidelines ────────────────────────────────────
+
+describe("loadProjectGuidelines", () => {
+	const tmpDirs: string[] = [];
+
+	function makeTmpDir(): string {
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "wiggum-test-"),
+		);
+		tmpDirs.push(dir);
+		return dir;
+	}
+
+	afterEach(() => {
+		for (const dir of tmpDirs) {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+		tmpDirs.length = 0;
+	});
+
+	it("finds file at worktree root", async () => {
+		const root = makeTmpDir();
+		const docDir = path.join(root, "doc");
+		fs.mkdirSync(docDir);
+		fs.writeFileSync(
+			path.join(docDir, "review-guidelines.md"),
+			"# My Guidelines\nCheck everything",
+		);
+		const exec: ExecFn = async () => ({
+			stdout: root + "\n",
+			stderr: "",
+			code: 0,
+		});
+		const result = await loadProjectGuidelines("/some/cwd", exec);
+		assert.equal(result, "# My Guidelines\nCheck everything");
+	});
+
+	it("falls back to cwd when not in git", async () => {
+		const cwd = makeTmpDir();
+		const docDir = path.join(cwd, "doc");
+		fs.mkdirSync(docDir);
+		fs.writeFileSync(
+			path.join(docDir, "review-guidelines.md"),
+			"Fallback content",
+		);
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "not a git repo",
+			code: 128,
+		});
+		const result = await loadProjectGuidelines(cwd, exec);
+		assert.equal(result, "Fallback content");
+	});
+
+	it("returns null when file absent", async () => {
+		const cwd = makeTmpDir();
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "not a git repo",
+			code: 128,
+		});
+		const result = await loadProjectGuidelines(cwd, exec);
+		assert.equal(result, null);
+	});
+
+	it("returns null for empty file", async () => {
+		const cwd = makeTmpDir();
+		const docDir = path.join(cwd, "doc");
+		fs.mkdirSync(docDir);
+		fs.writeFileSync(
+			path.join(docDir, "review-guidelines.md"), "",
+		);
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "",
+			code: 128,
+		});
+		const result = await loadProjectGuidelines(cwd, exec);
+		assert.equal(result, null);
+	});
+
+	it("returns null for whitespace-only file", async () => {
+		const cwd = makeTmpDir();
+		const docDir = path.join(cwd, "doc");
+		fs.mkdirSync(docDir);
+		fs.writeFileSync(
+			path.join(docDir, "review-guidelines.md"), "   \n\t\n  ",
+		);
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "",
+			code: 128,
+		});
+		const result = await loadProjectGuidelines(cwd, exec);
+		assert.equal(result, null);
 	});
 });

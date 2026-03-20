@@ -6,6 +6,7 @@ import {
 	DEFAULT_STOP_SIGNAL,
 	DEFAULT_TEST_COMMAND,
 	DEFAULT_WIGGUM_REVIEW_PROMPT,
+	REVIEW_GUIDELINES_TEMPLATE,
 	resolveExitScript,
 	type WiggumSettings,
 } from "../settings.js";
@@ -88,5 +89,18 @@ describe("default constants", () => {
 
 	it("DEFAULT_MIN_ITERATIONS is 2", () => {
 		assert.equal(DEFAULT_MIN_ITERATIONS, 2);
+	});
+});
+
+describe("REVIEW_GUIDELINES_TEMPLATE", () => {
+	it("is non-empty", () => {
+		assert.ok(REVIEW_GUIDELINES_TEMPLATE.length > 0);
+	});
+
+	it("contains key headings", () => {
+		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("## review criteria"));
+		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("### Priority levels"));
+		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("### Review priorities"));
+		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("## Project-specific"));
 	});
 });

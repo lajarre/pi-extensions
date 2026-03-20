@@ -46,6 +46,50 @@ complexity.
 If you find issues, fix them directly in the files. Be thorough \
 — this codebase will outlive you.`;
 
+export const REVIEW_GUIDELINES_TEMPLATE = `# Review Guidelines
+
+## review criteria
+
+Flag issues that:
+- Meaningfully impact accuracy, performance, security, or
+  maintainability
+- Are discrete and actionable
+- Were introduced in the changes being reviewed
+- The author would likely fix if aware of them
+
+Do NOT flag:
+- Pre-existing issues outside the current changes
+- Style preferences enforced by formatters/linters
+- Speculative impact without provable affected code
+
+### Priority levels
+
+Tag each finding:
+- [P0] Blocking. Drop everything.
+- [P1] Urgent. Next cycle.
+- [P2] Normal. Fix eventually.
+- [P3] Low. Nice to have.
+
+### Review priorities
+
+- Call out new dependencies and justify them
+- Prefer simple solutions over unnecessary abstractions
+- Favor fail-fast over logging-and-continue
+- Flag dead code, unused state, unreachable branches
+- Check error handling (codes not messages, no silent swallow)
+- Check untrusted input (SQL injection, open redirects, SSRF)
+
+## Project-specific
+
+<!-- Add your project's review priorities here.
+     Examples:
+     - CLI and library API must stay in sync
+     - All public functions need doc comments
+     - No hardcoded file paths
+     - Tests required for new behavior
+-->
+`;
+
 /**
  * Fallback exit patterns — copied from pi-review-loop.
  * Used when the agent ignores the WIGGUM_STOP instruction.

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExecFn } from "./settings.js";
 import { DEFAULT_WIGGUM_REVIEW_PROMPT } from "./settings.js";
 
@@ -18,6 +20,7 @@ export interface ContextOptions {
 	reviewPrompt?: string;
 	focus?: string;
 	stopSignal?: string;
+	guidelinesContent?: string;
 }
 
 // ── Diff commands ────────────────────────────────────────────
@@ -72,6 +75,7 @@ export async function assembleQualityContext(
 		reviewPrompt = DEFAULT_WIGGUM_REVIEW_PROMPT,
 		focus,
 		stopSignal = "WIGGUM_STOP",
+		guidelinesContent,
 	} = options;
 
 	const parts: string[] = [];
@@ -139,6 +143,14 @@ export async function assembleQualityContext(
 		}
 	}
 
+	// guidelines
+	if (guidelinesContent) {
+		parts.push("");
+		parts.push("## Guidelines");
+		parts.push("");
+		parts.push(guidelinesContent);
+	}
+
 	// instructions
 	parts.push("");
 	parts.push("## Instructions");
@@ -155,4 +167,34 @@ export async function assembleQualityContext(
 	parts.push(buildStopSignalBlock(stopSignal));
 
 	return parts.join("\n");
+}
+
+// ── Guidelines loading ───────────────────────────────────────
+
+function readTrimmedOrNull(filePath: string): string | null {
+	try {
+		const content = readFileSync(filePath, "utf-8").trim();
+		return content || null;
+	} catch {
+		return null;
+	}
+}
+
+export async function loadProjectGuidelines(
+	cwd: string,
+	exec: ExecFn,
+): Promise<string | null> {
+	const result = await exec(
+		"git", ["rev-parse", "--show-toplevel"], { cwd },
+	);
+	if (result.code === 0 && result.stdout.trim()) {
+		const root = result.stdout.trim();
+		const content = readTrimmedOrNull(
+			join(root, "doc", "review-guidelines.md"),
+		);
+		if (content) return content;
+	}
+	return readTrimmedOrNull(
+		join(cwd, "doc", "review-guidelines.md"),
+	);
 }
