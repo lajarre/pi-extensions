@@ -20,6 +20,7 @@ import { Type } from "@sinclair/typebox";
 import {
 	loadSettings,
 	resolveExitScript,
+	REVIEW_GUIDELINES_TEMPLATE,
 	type ExecFn,
 	type WiggumSettings,
 } from "./settings.js";
@@ -225,6 +226,66 @@ async function pickScope(ctx: ExtensionContext): Promise<ReviewScope | null> {
 	}, { overlay: true, overlayOptions: { anchor: "center", width: 50, maxHeight: "50%" } }) as Promise<ReviewScope | null>;
 }
 
+// ── Guidelines gate picker ───────────────────────────────────
+
+type GuidelinesChoice = {
+	action: "create" | "specify";
+	path: string;
+};
+
+async function pickGuidelinesAction(
+	ctx: ExtensionContext,
+	proposedPath: string,
+): Promise<GuidelinesChoice | null> {
+	if (!ctx.hasUI) return null;
+
+	const items: SelectItem[] = [
+		{ value: "create", label: `Create at ${proposedPath}`, description: "" },
+		{ value: "specify", label: "Specify a different path", description: "" },
+		{ value: "cancel", label: "Cancel", description: "" },
+	];
+
+	const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
+		container.addChild(new Text(theme.fg("warning", theme.bold("No review guidelines found"))));
+		container.addChild(new Text(theme.fg("dim", "Wiggum requires a guidelines file to review against.")));
+
+		const selectList = new SelectList(items, items.length, {
+			selectedPrefix: (text: string) => theme.fg("accent", text),
+			selectedText: (text: string) => theme.fg("accent", text),
+			description: (text: string) => theme.fg("muted", text),
+		});
+
+		selectList.onSelect = (item) => done(item.value as string);
+		selectList.onCancel = () => done(null);
+
+		container.addChild(selectList);
+		container.addChild(new Text(theme.fg("dim", "Enter to confirm, Esc to cancel")));
+		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
+
+		return {
+			render(width: number) { return container.render(width); },
+			invalidate() { container.invalidate(); },
+			handleInput(data: string) { selectList.handleInput(data); tui.requestRender(); },
+		};
+	}, { overlay: true, overlayOptions: { anchor: "center", width: 60, maxHeight: "50%" } });
+
+	if (result === "create") {
+		return { action: "create", path: proposedPath };
+	}
+
+	if (result === "specify") {
+		ctx.ui.notify(
+			"Use --spec <path> or /wiggum guide <path> to specify a guidelines file.",
+			"info",
+		);
+		return null;
+	}
+
+	return null; // cancel or esc
+}
+
 // ── Extension ────────────────────────────────────────────────
 
 export default function wiggumExtension(pi: ExtensionAPI) {
@@ -293,10 +354,31 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 
 		// 4. hard gate — no guidelines found
 		if (!guidelinesContent) {
-			if (ctx.hasUI) {
-				ctx.ui.notify("No review guidelines found. Create doc/review-guidelines.md or use --spec.", "error");
+			if (!ctx.hasUI) {
+				// tool path: return null, caller gets error
+				return null;
 			}
-			return null;
+
+			const proposedPath = await resolveGuidelinesPath(cwd, exec);
+			const choice = await pickGuidelinesAction(ctx, proposedPath);
+
+			if (!choice) return null; // cancelled
+
+			if (choice.action === "create") {
+				fs.mkdirSync(path.dirname(choice.path), { recursive: true });
+				fs.writeFileSync(choice.path, REVIEW_GUIDELINES_TEMPLATE);
+				guidelinesContent = REVIEW_GUIDELINES_TEMPLATE;
+				ctx.ui.notify(`Created ${choice.path}`, "info");
+			} else if (choice.action === "specify") {
+				try {
+					const content = fs.readFileSync(choice.path, "utf-8").trim();
+					if (!content) throw new Error("File is empty");
+					guidelinesContent = content;
+				} catch (err) {
+					ctx.ui.notify(`Cannot read: ${choice.path}`, "error");
+					return null;
+				}
+			}
 		}
 
 		const agentConfig = buildInlineAgent(settings);
