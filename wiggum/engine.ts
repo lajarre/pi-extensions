@@ -151,6 +151,7 @@ export async function runWiggumLoop(
 				maxIterations: max,
 				durationMs: Date.now() - iterationStart,
 				error: `context error: ${lastOutput}`,
+				agentOutput: lastOutput.slice(0, 2000),
 			});
 			consecutiveErrors++;
 			if (consecutiveErrors >= 3) {
@@ -207,6 +208,7 @@ export async function runWiggumLoop(
 				maxIterations: max,
 				durationMs: Date.now() - iterationStart,
 				error: `agent error: ${lastOutput}`,
+				agentOutput: lastOutput.slice(0, 2000),
 			});
 			consecutiveErrors++;
 			if (consecutiveErrors >= 3) {
@@ -257,6 +259,7 @@ export async function runWiggumLoop(
 				exitScriptOutput: gate.exitScriptOutput,
 			},
 			agentSignal: shouldStop(lastOutput, flow.gateConfig.stopSignal),
+			agentOutput: lastOutput.slice(0, 2000),
 		});
 
 		completedIterations = i;
