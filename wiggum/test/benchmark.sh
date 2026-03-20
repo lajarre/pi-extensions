@@ -6,7 +6,7 @@ TEMPLATE_REPO="/Users/alex/workspace/aidev/_tmp/wigetest-template"
 REFERENCE_REPO="/Users/alex/workspace/aidev/_tmp/wigtest"
 REFERENCE_BRANCH="review/self-review-cleanup"
 REFERENCE_COMMIT="709abac"
-TEMPLATE_COMMIT="220893f"
+TEMPLATE_COMMIT="558dd3a"
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 WORKDIR="_tmp/wigtest-bench-${STAMP}"
@@ -123,8 +123,10 @@ info "launching pi (this may take a while)…"
 
 info "pi finished, output saved to wiggum-output.txt"
 
-# grab the most recent wiggum log (--no-session → /tmp fallback)
-WIGGUM_LOG="$(find /tmp ~/.pi/agent/sessions \
+# grab the wiggum log — check TMPDIR, /tmp, and session dirs
+# macOS TMPDIR is /var/folders/..., not /tmp
+SEARCH_DIRS="${TMPDIR:-/tmp} /tmp ${HOME}/.pi/agent/sessions"
+WIGGUM_LOG="$(find $SEARCH_DIRS -maxdepth 4 \
   -name 'wiggum-log.jsonl' 2>/dev/null \
   | xargs ls -t 2>/dev/null | head -1 || true)"
 
@@ -132,7 +134,14 @@ if [ -n "$WIGGUM_LOG" ]; then
   cp "$WIGGUM_LOG" "$WORKDIR/wiggum-log.jsonl"
   info "copied wiggum log: $WIGGUM_LOG"
 else
-  info "warning: wiggum-log.jsonl not found"
+  # try to extract path from pi output
+  LOG_FROM_OUTPUT="$(grep -o '/[^ ]*wiggum-log.jsonl' "$WORKDIR/wiggum-output.txt" | head -1 || true)"
+  if [ -n "$LOG_FROM_OUTPUT" ] && [ -f "$LOG_FROM_OUTPUT" ]; then
+    cp "$LOG_FROM_OUTPUT" "$WORKDIR/wiggum-log.jsonl"
+    info "copied wiggum log from pi output: $LOG_FROM_OUTPUT"
+  else
+    info "warning: wiggum-log.jsonl not found"
+  fi
 fi
 
 # ── phase 3: verification ───────────────────────────────────────
