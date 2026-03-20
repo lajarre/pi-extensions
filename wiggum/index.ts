@@ -247,6 +247,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 		scope: ReviewScope,
 		focus?: string,
 		maxOverride?: number,
+		specPath?: string,
 	): Promise<LoopResult | null> {
 		if (loopActive) {
 			if (ctx.hasUI) ctx.ui.notify("Wiggum loop already active", "warning");
@@ -352,7 +353,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 	// ── Commands ─────────────────────────────────────────────
 
 	pi.registerCommand("wiggum", {
-		description: "Wiggum loop: /wiggum quality [focus], /wiggum stop, /wiggum status, /wiggum max N",
+		description: "Wiggum loop: /wiggum quality [focus], /wiggum stop, /wiggum status, /wiggum max N, /wiggum guide [path|clear]",
 		handler: async (args, ctx) => {
 			if (!ctx.hasUI) return;
 			const parts = args.trim().split(/\s+/);
@@ -369,20 +370,21 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 			}
 
 			if (subcommand === "status") {
+				const specInfo = activeSpec ? `\nSpec: ${activeSpec}` : "";
 				if (loopActive) {
 					ctx.ui.notify(
-						`Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}`,
+						`Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}${specInfo}`,
 						"info",
 					);
 				} else if (lastResult) {
 					const logSuffix = lastLogFile ? ` Log: ${lastLogFile}` : "";
 					ctx.ui.notify(
-						`Wiggum loop inactive. Last run: ${lastResult.iterations} iteration(s), exit: ${lastResult.exitReason}.${logSuffix}`,
+						`Wiggum loop inactive. Last run: ${lastResult.iterations} iteration(s), exit: ${lastResult.exitReason}.${logSuffix}${specInfo}`,
 						"info",
 					);
 				} else {
 					ctx.ui.notify(
-						`Wiggum loop inactive (max: ${settings.maxIterations})`,
+						`Wiggum loop inactive (max: ${settings.maxIterations})${specInfo}`,
 						"info",
 					);
 				}
@@ -402,12 +404,52 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			if (subcommand === "guide") {
+				const guideArg = parts[1]?.trim();
+				if (!guideArg) {
+					ctx.ui.notify(
+						activeSpec ? `Spec: ${activeSpec}` : "No spec bound",
+						"info",
+					);
+				} else if (guideArg === "clear") {
+					activeSpec = null;
+					ctx.ui.notify("Spec binding cleared", "info");
+				} else {
+					try {
+						fs.readFileSync(guideArg, "utf-8");
+						activeSpec = guideArg;
+						ctx.ui.notify(`Spec bound: ${guideArg}`, "info");
+					} catch {
+						ctx.ui.notify(`Cannot read spec file: ${guideArg}`, "error");
+					}
+				}
+				return;
+			}
+
 			if (subcommand === "quality") {
-				const focus = parts.slice(1).join(" ").trim() || undefined;
+				const qualityParts = parts.slice(1);
+				let specPath: string | undefined;
+				const specIdx = qualityParts.indexOf("--spec");
+				if (specIdx !== -1) {
+					const specArg = qualityParts[specIdx + 1];
+					if (!specArg) {
+						ctx.ui.notify("Usage: /wiggum quality --spec <path> [focus]", "error");
+						return;
+					}
+					try {
+						fs.readFileSync(specArg, "utf-8");
+					} catch {
+						ctx.ui.notify(`Cannot read spec file: ${specArg}`, "error");
+						return;
+					}
+					specPath = specArg;
+					qualityParts.splice(specIdx, 2);
+				}
+				const focus = qualityParts.join(" ").trim() || undefined;
 
 				const scope = await pickScope(ctx);
 				if (!scope) return; // user cancelled
-				startQualityLoop(ctx, scope, focus).catch((err) => {
+				startQualityLoop(ctx, scope, focus, undefined, specPath).catch((err) => {
 					if (ctx.hasUI) {
 						ctx.ui.notify(
 							`Wiggum loop error: ${err instanceof Error ? err.message : String(err)}`,
@@ -453,6 +495,9 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				description: "Override max iterations",
 				minimum: 1,
 			})),
+			spec: Type.Optional(Type.String({
+				description: "Path to spec/guidelines file to review against",
+			})),
 		}),
 
 		async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -470,7 +515,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 
 			if (params.start && params.flow === "quality") {
 				const scope: ReviewScope = (params.scope as ReviewScope) || "uncommitted";
-				const result = await startQualityLoop(ctx, scope, params.focus, params.maxIterations);
+				const result = await startQualityLoop(ctx, scope, params.focus, params.maxIterations, params.spec);
 				return {
 					content: [{
 						type: "text",
@@ -485,11 +530,12 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 
 			// status
 			const logSuffix = lastLogFile ? ` Log: ${lastLogFile}` : "";
+			const specInfo = activeSpec ? ` Spec: ${activeSpec}` : "";
 			const statusText = loopActive
-				? `Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}`
+				? `Wiggum ${currentFlow} loop: iteration ${currentIteration}/${currentMax}${specInfo}`
 				: lastResult
-					? `Wiggum loop inactive. Last run: ${lastResult.iterations} iteration(s), exit: ${lastResult.exitReason}.${logSuffix}`
-					: `Wiggum loop inactive (max: ${settings.maxIterations})`;
+					? `Wiggum loop inactive. Last run: ${lastResult.iterations} iteration(s), exit: ${lastResult.exitReason}.${logSuffix}${specInfo}`
+					: `Wiggum loop inactive (max: ${settings.maxIterations})${specInfo}`;
 			return {
 				content: [{
 					type: "text",
