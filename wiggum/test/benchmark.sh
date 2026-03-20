@@ -79,19 +79,25 @@ files to find and fix each one.
 
 3. **CLI notes support**: the `TodoItem` struct has a `notes`
    field but the CLI has no way to set it. FIX: add
-   `--note <text>` option to the `add` command.
+   `--note <text>` option to the `add` command. Handle edge
+   cases: `--` separator, duplicate `--note` rejection, and
+   normalize blank notes to `None`.
 
 4. **Demo behavior**: the `demo` command hardcodes `complete(1)`.
    FIX: complete the item that was just created (use its
-   returned id), not a hardcoded id.
+   returned id), not a hardcoded id. Extract demo logic into
+   a named helper function.
 
 5. **Graceful shutdown**: `watch` uses `abort()` to kill the
    reminder task. FIX: use cooperative shutdown via a channel
-   (e.g., `tokio::sync::mpsc` or `tokio::sync::oneshot`).
+   (e.g., `tokio::sync::watch` or `tokio::sync::oneshot`).
+   Preserve the `ReminderTask` public type — refactor its
+   internals to use the channel.
 
 6. **Persistence safety**: `persist()` writes directly to the
    data file. FIX: write to a temp file first, then rename
-   (atomic). Rollback in-memory state if the write fails.
+   (atomic). Create parent directories for user-configured
+   paths. Rollback in-memory state if the write fails.
 
 7. **Reminder filter**: `reminder_report` includes completed
    items. FIX: filter to pending items only (`!todo.done`).
@@ -115,18 +121,22 @@ files to find and fix each one.
     add tests for reminder filtering, ordering, and any new CLI
     features.
 
-## Do NOT change
+## Design principles
 
-Unless explicitly listed in the checklist above:
-- Do not remove or rename fields from data models or persisted
-  schemas (e.g., keep `created_at_ms` in `TodoItem`)
-- Do not remove public types, traits, or API abstractions
-  (e.g., keep `ReminderTask` if it exists as a public type)
-- Do not inline logic that is currently in a named helper
-  function — extract new helpers instead
-- Prefer idiomatic Rust patterns (e.g., `ExitCode` over
-  `process::exit`)
-- If in doubt whether something should change, leave it as-is
+When fixing issues, follow these principles:
+- Public types and abstractions are API contracts — refactor
+  their internals, don't delete them
+- Data model fields are part of the persisted schema — add
+  fields, don't remove existing ones
+- Multi-step operations belong in named helper functions
+- CLI must require an explicit command — empty input prints
+  usage, never defaults to a command
+- Persistence must handle user-configured paths (create parent
+  directories) and fail atomically (temp file + rename)
+- Option/flag parsing should handle edge cases: separator (--),
+  duplicates, blank values
+- Prefer idiomatic Rust (ExitCode over process::exit, thiserror
+  over manual Display)
 GUIDELINES_EOF
 (cd "$WORKDIR/run" && git add doc/review-guidelines.md && \
   git commit -m "add review guidelines" --quiet)
