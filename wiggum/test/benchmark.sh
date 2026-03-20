@@ -28,64 +28,92 @@ mkdir -p "$WORKDIR/run/doc"
 cat > "$WORKDIR/run/doc/review-guidelines.md" << 'GUIDELINES_EOF'
 # Review Guidelines
 
-## review criteria
+<EXTREMELY-IMPORTANT>
+You MUST read ALL source files in their entirety, not just the
+diff. The diff shows what changed, but many issues are only
+visible by reading the full file. Read every .rs file in src/
+before making any judgment.
 
-Flag issues that:
-- Meaningfully impact accuracy, performance, security, or
-  maintainability
+You MUST fix every item in the project-specific checklist below.
+Do NOT just note issues — fix them in the code. If an item says
+"add X", add it. If it says "remove Y", remove it. Noting an
+issue without fixing it is a failed review.
+</EXTREMELY-IMPORTANT>
+
+## Review criteria
+
+Fix issues that:
+- Impact accuracy, performance, security, or maintainability
 - Are discrete and actionable
-- Were introduced in the changes being reviewed
-- The author would likely fix if aware of them
+- The author would fix if aware of them
 
-Do NOT flag:
-- Pre-existing issues outside the current changes
+Do NOT fix:
 - Style preferences enforced by formatters/linters
-- Speculative impact without provable affected code
 
 ### Priority levels
 
-Tag each finding:
-- [P0] Blocking. Drop everything.
-- [P1] Urgent. Next cycle.
-- [P2] Normal. Fix eventually.
-- [P3] Low. Nice to have.
+Tag each fix:
+- [P0] Blocking — fix immediately
+- [P1] Urgent — fix in this pass
+- [P2] Normal — fix in this pass
+- [P3] Low — fix if time permits
 
-### Review priorities
+### General review priorities
 
-- Call out new dependencies and justify them
+- Remove dead code, unused state, unreachable branches
+- Check error handling (codes not messages, no silent swallow)
 - Prefer simple solutions over unnecessary abstractions
 - Favor fail-fast over logging-and-continue
-- Flag dead code, unused state, unreachable branches
-- Check error handling (codes not messages, no silent swallow)
-- Check untrusted input (SQL injection, open redirects, SSRF)
 
-## Project-specific
+## Project-specific checklist
 
-1. **CLI / data-path** — binary uses a fixed `todo-data.json` in
-   cwd with no CLI option or env override for the data path.
-2. **Explicit command** — `add_todo` validates `trim()` but stores
-   the raw string, so titles keep accidental leading/trailing
-   whitespace.
-3. **CLI notes support** — CLI lacks a way to attach notes or
-   descriptions to todo items beyond the title.
-4. **Demo behavior** — `reminder_report` reminds about items with
-   `done == true`, which is backwards for a todo reminder loop.
-5. **Graceful shutdown** — `watch` aborts the spawned task rather
-   than shutting it down through an explicit cancellation path.
-6. **Persistence** — rewrites the whole JSON file on every
-   mutation; reviewer should call out the scaling trade-off.
-7. **Title / reminder / order** — `list` orders by
-   `(done, title.len(), id)` instead of a stated product rule;
-   visible order is surprising and unstable.
-8. **Dead state** — flag dead code, unused state, unreachable
-   branches in the codebase.
-9. **CLI parse tightening** — rustfmt drift and unused locals in
-   `main.rs` that `cargo clippy -- -D warnings` should reject.
-10. **Error rendering** — check error handling, codes not messages,
-    no silent swallow.
-11. **Docs alignment** — tests cover the happy path only; no
-    exercise for reminder behavior, no check for ordering
-    semantics, and no ctrl-c/watch test.
+You MUST address ALL of the following. Read the full source
+files to find and fix each one.
+
+1. **CLI / data-path**: `main.rs` hardcodes `"todo-data.json"`.
+   FIX: add `--data <path>` CLI arg and `WIGTEST_DATA_PATH` env
+   var support. Default to `"todo-data.json"` when neither set.
+
+2. **Title storage**: `add_todo` validates with `trim()` but
+   stores the raw untrimmed string. FIX: store the trimmed title.
+
+3. **CLI notes support**: the `TodoItem` struct has a `notes`
+   field but the CLI has no way to set it. FIX: add
+   `--note <text>` option to the `add` command.
+
+4. **Demo behavior**: the `demo` command hardcodes `complete(1)`.
+   FIX: complete the item that was just created (use its
+   returned id), not a hardcoded id.
+
+5. **Graceful shutdown**: `watch` uses `abort()` to kill the
+   reminder task. FIX: use cooperative shutdown via a channel
+   (e.g., `tokio::sync::mpsc` or `tokio::sync::oneshot`).
+
+6. **Persistence safety**: `persist()` writes directly to the
+   data file. FIX: write to a temp file first, then rename
+   (atomic). Rollback in-memory state if the write fails.
+
+7. **Reminder filter**: `reminder_report` includes completed
+   items. FIX: filter to pending items only (`!todo.done`).
+   Also fix list sort: change from `(done, title.len(), id)` to
+   `(done, id)`.
+
+8. **Dead state**: look for fields/state that is written but
+   never read. FIX: remove them entirely (not just comment out).
+
+9. **Hook bait**: `main.rs` has rustfmt drift and an unused
+   local variable. FIX: format the code and remove the unused
+   variable.
+
+10. **Error rendering**: if `main` returns `Result` directly, the
+    output shows `Error: Usage("...")`. FIX: catch errors and
+    print clean user-facing messages via `Display`, then exit
+    with non-zero code.
+
+11. **Docs / tests**: README and REVIEWER_EXPECTATIONS.md may not
+    match actual behavior after fixes. FIX: update them. Also
+    add tests for reminder filtering, ordering, and any new CLI
+    features.
 GUIDELINES_EOF
 (cd "$WORKDIR/run" && git add doc/review-guidelines.md && \
   git commit -m "add review guidelines" --quiet)

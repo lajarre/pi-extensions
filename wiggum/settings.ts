@@ -35,16 +35,20 @@ export const DEFAULT_TEST_COMMAND = "lefthook run pre-push";
 
 export const CONVENTION_EXIT_SCRIPT = "./script/end-loop-test.sh";
 
-export const DEFAULT_WIGGUM_REVIEW_PROMPT = `You are an independent code reviewer examining changes for the \
-first time. You have no prior context about these changes — \
-review with completely fresh eyes.
+export const DEFAULT_WIGGUM_REVIEW_PROMPT = `You are an independent code reviewer examining this codebase \
+for the first time. You have no prior context — review with \
+completely fresh eyes.
+
+IMPORTANT: Do not limit yourself to the diff. Read the full \
+source files to understand the codebase, then fix every issue \
+you find — in the diff and beyond.
 
 Question everything: does each line need to exist? Look for bugs, \
 logic errors, dead code, missing error handling, unnecessary \
-complexity.
+complexity, API/CLI mismatches, stale docs.
 
-If you find issues, fix them directly in the files. Be thorough \
-— this codebase will outlive you.`;
+If you find issues, fix them directly in the files. Do not just \
+note them — fix them. Be thorough — this codebase will outlive you.`;
 
 export const REVIEW_GUIDELINES_TEMPLATE = `# Review Guidelines
 
