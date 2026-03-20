@@ -58,8 +58,15 @@ all 11.
 | **Run 5 design principles** | **11/11** | **3 better, 1 worse** | positive framing, specific fix shapes |
 
 Run 5 validated 3x in parallel — 100% marker consistency.
-cf2ebc33 confirmed: "first automated output genuinely comparable
-to the manual cleanup."
+
+cf2ebc33's final verdict on 3x run 5a: **5 wiggum better,
+0 reference better, 6 same.** Quote: "not only comparable to
+the manual cleanup, but better overall due to stronger CLI
+behavior, persistence safety, and test coverage."
+
+Note: the original run 5 (135623) scored 3/1/7. The 3x run 5a
+(141401) scored 5/0/6 — same guidelines, different random seed,
+better outcome. This variance is expected with LLM agents.
 
 cf2ebc33's corrected assessment: run 4 is "materially better
 than run 3" despite 0 wiggum-better categories. The constraints
