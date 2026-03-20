@@ -53,8 +53,13 @@ all 11.
 |-----|-----------|-------------|-------------|
 | V1 no guidelines | 3/11 | — | diff-only, generic prompt |
 | V1.1 passive | 5/11 | — | "flag issues" language |
-| V1.1 prescriptive (run 3) | **11/11** | 3 better, **4 worse** | "you MUST fix", aggressive |
-| V1.2 w/ constraints (run 4) | **11/11** | 0 better, **5 worse** | + "do NOT change" section |
+| Run 3 prescriptive | **11/11** | 3 better, **4 worse** | "you MUST fix", aggressive |
+| Run 4 w/ constraints | **11/11** | 0 better, **6 worse** | + "do NOT change" section |
+| **Run 5 design principles** | **11/11** | **3 better, 1 worse** | positive framing, specific fix shapes |
+
+Run 5 validated 3x in parallel — 100% marker consistency.
+cf2ebc33 confirmed: "first automated output genuinely comparable
+to the manual cleanup."
 
 cf2ebc33's corrected assessment: run 4 is "materially better
 than run 3" despite 0 wiggum-better categories. The constraints
@@ -162,10 +167,25 @@ but also fewer wounds.
 - 2 style preferences (demo helper, CLI structure) — arguably
   acceptable variation
 
-**Implication:** inline constraints per checklist item would
-close the remaining gaps: "fix graceful shutdown WHILE
-preserving ReminderTask", "add --note with --, duplicate
-rejection, blank normalization", etc.
+Run 5 proved this right: inline fix shapes in checklist items
+("preserve ReminderTask", "add --note with --/duplicates/blanks")
+combined with positive design principles produced 3 better /
+1 worse / 7 same.
+
+### 2b. Positive framing > negative framing
+
+The winning insight across 5 runs:
+
+| Approach | Effect |
+|----------|--------|
+| No guardrails | Agent is creative but destructive |
+| "Do NOT change X" | Agent is safe but timid |
+| "Good code looks like X" | Agent is creative AND disciplined |
+
+Negative constraints ("do NOT") are read as "be cautious" and
+kill beneficial aggressiveness. Positive principles ("public
+types are API contracts — refactor internals, don't delete them")
+channel aggressiveness without dampening it.
 
 ### 3. Fresh eyes catch bugs in fixes
 
