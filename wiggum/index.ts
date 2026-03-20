@@ -369,15 +369,6 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				fs.writeFileSync(choice.path, REVIEW_GUIDELINES_TEMPLATE);
 				guidelinesContent = REVIEW_GUIDELINES_TEMPLATE;
 				ctx.ui.notify(`Created ${choice.path}`, "info");
-			} else if (choice.action === "specify") {
-				try {
-					const content = fs.readFileSync(choice.path, "utf-8").trim();
-					if (!content) throw new Error("File is empty");
-					guidelinesContent = content;
-				} catch (err) {
-					ctx.ui.notify(`Cannot read: ${choice.path}`, "error");
-					return null;
-				}
 			}
 		}
 
@@ -636,6 +627,26 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 
 			if (params.start && params.flow === "quality") {
 				const scope: ReviewScope = (params.scope as ReviewScope) || "uncommitted";
+
+				// Pre-check guidelines in tool path — startQualityLoop
+				// returns bare null with no context for the caller.
+				if (!ctx.hasUI) {
+					const exec = makeExec();
+					const hasGuidelines = params.spec
+						|| activeSpec
+						|| await loadProjectGuidelines(ctx.cwd, exec);
+					if (!hasGuidelines) {
+						const proposedPath = await resolveGuidelinesPath(ctx.cwd, exec);
+						return {
+							content: [{
+								type: "text",
+								text: `No review guidelines found. Create doc/review-guidelines.md at: ${proposedPath}\nOr pass spec parameter with a path to your guidelines file.`,
+							}],
+							isError: true,
+						};
+					}
+				}
+
 				const result = await startQualityLoop(ctx, scope, params.focus, params.maxIterations, params.spec);
 				return {
 					content: [{
