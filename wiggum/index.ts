@@ -29,7 +29,7 @@ import {
 	type LoopResult,
 	type WiggumWidgetState,
 } from "./engine.js";
-import { assembleQualityContext, type ReviewScope } from "./context.js";
+import { assembleQualityContext, loadProjectGuidelines, type ReviewScope } from "./context.js";
 import type { GateConfig } from "./gate.js";
 
 const execFileAsync = promisify(execFile);
@@ -261,6 +261,44 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 		const logFile = resolveLogFile(ctx);
 		lastLogFile = logFile;
 
+		// ── Resolve guidelines (precedence chain) ────────
+		let guidelinesContent: string | null = null;
+
+		// 1. explicit --spec or tool spec
+		if (specPath) {
+			try {
+				const content = fs.readFileSync(specPath, "utf-8").trim();
+				if (!content) throw new Error("File is empty");
+				guidelinesContent = content;
+			} catch (err) {
+				if (ctx.hasUI) ctx.ui.notify(`Cannot read spec: ${specPath} — ${err}`, "error");
+				return null;
+			}
+		}
+
+		// 2. activeSpec (set via /wiggum guide)
+		if (!guidelinesContent && activeSpec) {
+			try {
+				const content = fs.readFileSync(activeSpec, "utf-8").trim();
+				if (content) guidelinesContent = content;
+			} catch {
+				if (ctx.hasUI) ctx.ui.notify(`Bound spec unreadable: ${activeSpec}, trying auto-load...`, "warning");
+			}
+		}
+
+		// 3. auto-load review-guidelines.md
+		if (!guidelinesContent) {
+			guidelinesContent = await loadProjectGuidelines(cwd, exec);
+		}
+
+		// 4. hard gate — no guidelines found
+		if (!guidelinesContent) {
+			if (ctx.hasUI) {
+				ctx.ui.notify("No review guidelines found. Create doc/review-guidelines.md or use --spec.", "error");
+			}
+			return null;
+		}
+
 		const agentConfig = buildInlineAgent(settings);
 		const gateConfig: GateConfig = {
 			stopSignal: settings.stopSignal,
@@ -297,6 +335,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 							reviewPrompt: settings.reviewPrompt,
 							focus,
 							stopSignal: settings.stopSignal,
+							guidelinesContent,
 						}),
 					agentConfig,
 					maxIterations: currentMax,
