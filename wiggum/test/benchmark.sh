@@ -173,10 +173,10 @@ git archive "$REFERENCE_BRANCH" --prefix=reference/ \
   | tar -xC "$WORKDIR"
 cd - >/dev/null
 
-diff -rq "$WORKDIR/run/src" "$WORKDIR/reference/reference/src" \
+diff -rq "$WORKDIR/run/src" "$WORKDIR/reference/src" \
   > "$WORKDIR/wiggum-changes.txt" 2>&1 || true
 
-diff -ru "$WORKDIR/reference/reference/src" "$WORKDIR/run/src" \
+diff -ru "$WORKDIR/reference/src" "$WORKDIR/run/src" \
   > "$WORKDIR/diff-vs-reference.txt" 2>&1 || true
 
 info "diffs generated"
