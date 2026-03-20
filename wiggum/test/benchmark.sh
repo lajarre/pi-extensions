@@ -114,6 +114,19 @@ files to find and fix each one.
     match actual behavior after fixes. FIX: update them. Also
     add tests for reminder filtering, ordering, and any new CLI
     features.
+
+## Do NOT change
+
+Unless explicitly listed in the checklist above:
+- Do not remove or rename fields from data models or persisted
+  schemas (e.g., keep `created_at_ms` in `TodoItem`)
+- Do not remove public types, traits, or API abstractions
+  (e.g., keep `ReminderTask` if it exists as a public type)
+- Do not inline logic that is currently in a named helper
+  function — extract new helpers instead
+- Prefer idiomatic Rust patterns (e.g., `ExitCode` over
+  `process::exit`)
+- If in doubt whether something should change, leave it as-is
 GUIDELINES_EOF
 (cd "$WORKDIR/run" && git add doc/review-guidelines.md && \
   git commit -m "add review guidelines" --quiet)

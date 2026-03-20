@@ -43,12 +43,14 @@ IMPORTANT: Do not limit yourself to the diff. Read the full \
 source files to understand the codebase, then fix every issue \
 you find — in the diff and beyond.
 
-Question everything: does each line need to exist? Look for bugs, \
-logic errors, dead code, missing error handling, unnecessary \
-complexity, API/CLI mismatches, stale docs.
+Look for bugs, logic errors, dead code, missing error handling, \
+unnecessary complexity, API/CLI mismatches, stale docs. Fix \
+issues you find directly in the files — do not just note them.
 
-If you find issues, fix them directly in the files. Do not just \
-note them — fix them. Be thorough — this codebase will outlive you.`;
+Stay within scope: fix what is broken or listed in the \
+guidelines. Do not refactor working code, remove fields from \
+data models, or change public APIs unless the guidelines \
+explicitly ask for it.`;
 
 export const REVIEW_GUIDELINES_TEMPLATE = `# Review Guidelines
 
@@ -82,6 +84,17 @@ Tag each finding:
 - Flag dead code, unused state, unreachable branches
 - Check error handling (codes not messages, no silent swallow)
 - Check untrusted input (SQL injection, open redirects, SSRF)
+
+## Do NOT change
+
+Unless explicitly listed in the project-specific section below:
+- Do not remove or rename fields from data models or persisted
+  schemas
+- Do not remove public types, traits, or API abstractions
+- Do not inline logic that is currently in a named helper
+  function
+- Prefer idiomatic language patterns over ad-hoc alternatives
+- If in doubt whether something should change, leave it as-is
 
 ## Project-specific
 
