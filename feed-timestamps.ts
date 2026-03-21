@@ -54,11 +54,13 @@ declare global {
 	var __piFeedTimestampsState__: PatchState | undefined;
 }
 
-const state =
-	globalThis.__piFeedTimestampsState__ ??
-	(globalThis.__piFeedTimestampsState__ = {
+let state = globalThis.__piFeedTimestampsState__;
+if (!state) {
+	state = {
 		patched: false,
-	});
+	};
+	globalThis.__piFeedTimestampsState__ = state;
+}
 
 function getPkgRoot(): string {
 	if (state.pkgRoot) return state.pkgRoot;
@@ -75,7 +77,8 @@ function pad2(value: number): string {
 }
 
 function formatTimestamp(timestamp?: number): string | undefined {
-	if (timestamp === undefined || !Number.isFinite(timestamp)) return undefined;
+	if (timestamp === undefined || !Number.isFinite(timestamp))
+		return undefined;
 
 	const date = new Date(timestamp);
 	return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
@@ -94,7 +97,8 @@ function renderRightAlignedTimestamp(
 	timestamp: string,
 	theme?: ThemeModule["theme"],
 ): string {
-	const text = timestamp.length > width ? timestamp.slice(-width) : timestamp;
+	const text =
+		timestamp.length > width ? timestamp.slice(-width) : timestamp;
 	const rendered = theme ? theme.fg("dim", text) : text;
 	const spacing = Math.max(0, width - stripAnsi(rendered).length);
 	return `${" ".repeat(spacing)}${rendered}`;
@@ -115,7 +119,9 @@ function replaceTopPaddingLine(
 	return lines;
 }
 
-function getUserTimestamp(component: TimestampedUserMessage): string | undefined {
+function getUserTimestamp(
+	component: TimestampedUserMessage,
+): string | undefined {
 	const patched = component[USER_TIMESTAMP_PROPERTY];
 	if (typeof patched === "string" && patched) return patched;
 
@@ -127,30 +133,39 @@ function getUserTimestamp(component: TimestampedUserMessage): string | undefined
 }
 
 function setUserTimestamp(component: unknown, timestamp: string): void {
-	(component as Record<string, unknown>)[USER_TIMESTAMP_PROPERTY] = timestamp;
+	(component as Record<string, unknown>)[USER_TIMESTAMP_PROPERTY] =
+		timestamp;
 }
 
-async function importInternal<T = unknown>(relativePath: string): Promise<T> {
-	const url = pathToFileURL(path.join(getPkgRoot(), "dist", relativePath)).href;
+async function importInternal<T = unknown>(
+	relativePath: string,
+): Promise<T> {
+	const url = pathToFileURL(
+		path.join(getPkgRoot(), "dist", relativePath),
+	).href;
 	return (await import(url)) as T;
 }
 
 async function installPatches(): Promise<void> {
 	if (state.patched) return;
 
-	const [userModule, assistantModule, interactiveModeModule, themeModule] =
-		await Promise.all([
-			importInternal<{
-				UserMessageComponent: UserMessageComponentLike;
-			}>("modes/interactive/components/user-message.js"),
-			importInternal<{
-				AssistantMessageComponent: AssistantMessageComponentLike;
-			}>("modes/interactive/components/assistant-message.js"),
-			importInternal<{
-				InteractiveMode: InteractiveModeLike;
-			}>("modes/interactive/interactive-mode.js"),
-			importInternal<ThemeModule>("modes/interactive/theme/theme.js"),
-		]);
+	const [
+		userModule,
+		assistantModule,
+		interactiveModeModule,
+		themeModule,
+	] = await Promise.all([
+		importInternal<{
+			UserMessageComponent: UserMessageComponentLike;
+		}>("modes/interactive/components/user-message.js"),
+		importInternal<{
+			AssistantMessageComponent: AssistantMessageComponentLike;
+		}>("modes/interactive/components/assistant-message.js"),
+		importInternal<{
+			InteractiveMode: InteractiveModeLike;
+		}>("modes/interactive/interactive-mode.js"),
+		importInternal<ThemeModule>("modes/interactive/theme/theme.js"),
+	]);
 
 	const { UserMessageComponent } = userModule;
 	const { AssistantMessageComponent } = assistantModule;
@@ -167,7 +182,9 @@ async function installPatches(): Promise<void> {
 	};
 
 	const assistantRender = AssistantMessageComponent.prototype.render;
-	AssistantMessageComponent.prototype.render = function (width: number) {
+	AssistantMessageComponent.prototype.render = function (
+		width: number,
+	) {
 		const lines = assistantRender.call(this, width);
 		const timestamp = formatTimestamp(this.lastMessage?.timestamp);
 		return timestamp

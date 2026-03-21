@@ -1,0 +1,35 @@
+{
+	"name": "pi-extensions",
+	"version": "1.0.0",
+	"description": "Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set of extensions used in my daily workflow.",
+	"main": "index.js",
+	"directories": {
+		"doc": "doc",
+		"test": "test"
+	},
+	"scripts": {
+		"lint": "biome lint .",
+		"format": "biome format --write .",
+		"check": "biome check .",
+		"test": "echo \"No tests configured\""
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/lajarre/pi-extensions.git"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"bugs": {
+		"url": "https://github.com/lajarre/pi-extensions/issues"
+	},
+	"homepage": "https://github.com/lajarre/pi-extensions#readme",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"just-bash": "^2.11.15"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.8"
+	}
+}
