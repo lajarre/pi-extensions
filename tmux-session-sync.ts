@@ -23,8 +23,12 @@ function syncPaneMetadata(pi: ExtensionAPI, uuid: string): void {
 		"-p",
 		"@resurrect-metadata-pi-session",
 		uuid,
-	]);
-	pi.exec("tmux", ["select-pane", "-T", `pi:${uuid.slice(0, 8)}`]);
+	]).catch(() => {});
+	pi.exec("tmux", [
+		"select-pane",
+		"-T",
+		`pi:${uuid.slice(0, 8)}`,
+	]).catch(() => {});
 }
 
 function handleSessionEvent(
