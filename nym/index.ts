@@ -22,6 +22,8 @@
  * Zero configuration required.
  */
 
+import { appendFileSync } from "node:fs";
+
 import { complete, type Message } from "@mariozechner/pi-ai";
 import type {
 	ExtensionAPI,
@@ -29,15 +31,13 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import {
 	DESCRIPTION_PROMPT,
-	structuredName,
 	type DescriptionLLMFn,
 	type ExecFn,
+	structuredName,
 } from "./resolve.js";
 
 const SOFT_THRESHOLD = 10;
 const HARD_THRESHOLD = 50;
-import { appendFileSync } from "node:fs";
-const NYM_DEBUG = !!process.env.NYM_DEBUG;
 const NYM_LOG = process.env.NYM_DEBUG ? "/tmp/nym-debug.log" : null;
 
 const FALLBACK_NAME_PROMPT = `You are a session naming assistant. Given conversation context, produce a short session name.
@@ -50,7 +50,8 @@ Rules:
 
 type ResolvedModel = {
 	model: any;
-	apiKey: string;
+	apiKey?: string;
+	headers?: Record<string, string>;
 };
 
 export default function nym(pi: ExtensionAPI) {
@@ -131,7 +132,9 @@ export default function nym(pi: ExtensionAPI) {
 	}
 
 	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
-	function gatherContext(ctx: { sessionManager: { getBranch(): SessionEntry[] } }): string {
+	function gatherContext(ctx: {
+		sessionManager: { getBranch(): SessionEntry[] };
+	}): string {
 		const entries = ctx.sessionManager.getBranch();
 		const MAX_CHARS = 1500;
 		const MAX_MESSAGES = 10;
@@ -169,8 +172,13 @@ export default function nym(pi: ExtensionAPI) {
 
 	function dbg(...args: any[]) {
 		if (!NYM_LOG) return;
-		const msg = args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-		appendFileSync(NYM_LOG, `[nym ${new Date().toISOString()}] ${msg}\n`);
+		const msg = args
+			.map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+			.join(" ");
+		appendFileSync(
+			NYM_LOG,
+			`[nym ${new Date().toISOString()}] ${msg}\n`,
+		);
 	}
 
 	/**
@@ -178,9 +186,10 @@ export default function nym(pi: ExtensionAPI) {
 	 * Deduplicates by provider so a failed provider is skipped
 	 * entirely — the next candidate is always a different provider.
 	 */
-	async function resolveModelCandidates(
-		ctx: { modelRegistry: any; model: any },
-	): Promise<ResolvedModel[]> {
+	async function resolveModelCandidates(ctx: {
+		modelRegistry: any;
+		model: any;
+	}): Promise<ResolvedModel[]> {
 		const candidates: ResolvedModel[] = [];
 		const seenProviders = new Set<string>();
 
@@ -198,23 +207,55 @@ export default function nym(pi: ExtensionAPI) {
 					dbg("skip duplicate provider:", provider, model.id);
 					continue;
 				}
-				const apiKey = await ctx.modelRegistry.getApiKey(model);
-				if (!apiKey) {
-					dbg("no api key for:", provider, model.id);
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+				if (!auth.ok) {
+					dbg("auth failed for:", provider, model.id, auth.error);
 					continue;
 				}
+				if (!auth.apiKey && !auth.headers) {
+					dbg("no request auth for:", provider, model.id);
+					continue;
+				}
+				const authKind =
+					auth.apiKey && auth.headers
+						? "key+headers"
+						: auth.apiKey
+							? "key"
+							: "headers";
 				if (provider) seenProviders.add(provider);
-				candidates.push({ model, apiKey });
-				dbg("candidate:", provider, model.id, `cost=${model.cost?.input}`);
+				candidates.push({
+					model,
+					apiKey: auth.apiKey,
+					headers: auth.headers,
+				});
+				dbg(
+					"candidate:",
+					provider,
+					model.id,
+					`cost=${model.cost?.input}`,
+					`auth=${authKind}`,
+				);
 			}
 		}
 
 		// Fallback: session's own model if not already covered.
 		if (candidates.length === 0 && ctx.model) {
-			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-			if (apiKey) {
-				candidates.push({ model: ctx.model, apiKey });
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(
+				ctx.model,
+			);
+			if (auth.ok && (auth.apiKey || auth.headers)) {
+				candidates.push({
+					model: ctx.model,
+					apiKey: auth.apiKey,
+					headers: auth.headers,
+				});
 				dbg("fallback to session model:", ctx.model.id);
+			} else {
+				dbg(
+					"fallback session model unavailable:",
+					ctx.model.id,
+					auth.ok ? "no request auth" : auth.error,
+				);
 			}
 		}
 
@@ -231,7 +272,10 @@ export default function nym(pi: ExtensionAPI) {
 		const userMessage: Message = {
 			role: "user",
 			content: [
-				{ type: "text", text: `<conversation>\n${context}\n</conversation>` },
+				{
+					type: "text",
+					text: `<conversation>\n${context}\n</conversation>`,
+				},
 			],
 			timestamp: Date.now(),
 		};
@@ -239,10 +283,16 @@ export default function nym(pi: ExtensionAPI) {
 		return complete(
 			resolved.model,
 			{ systemPrompt: prompt, messages: [userMessage] },
-			{ apiKey: resolved.apiKey, maxTokens: 64 },
+			{
+				apiKey: resolved.apiKey,
+				headers: resolved.headers,
+				maxTokens: 64,
+			},
 		).then((response) =>
 			response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.filter(
+					(c): c is { type: "text"; text: string } => c.type === "text",
+				)
 				.map((c) => c.text)
 				.join("")
 				.trim(),
@@ -258,21 +308,29 @@ export default function nym(pi: ExtensionAPI) {
 		context: string,
 		candidates: ResolvedModel[],
 	): Promise<string> {
-		const promptTag = prompt.includes("activity") ? "description" : "fallback";
-		dbg(`generateWithPrompt[${promptTag}]: ${candidates.length} candidates, context=${context.length}chars`);
+		const promptTag = prompt.includes("activity")
+			? "description"
+			: "fallback";
+		dbg(
+			`generateWithPrompt[${promptTag}]: ${candidates.length} candidates, context=${context.length}chars`,
+		);
 		for (const candidate of candidates) {
 			const id = candidate.model?.id ?? "unknown";
 			try {
 				const result = await callModel(prompt, context, candidate);
 				if (!result) {
-					dbg(`generateWithPrompt[${promptTag}]: ${id} → empty, trying next`);
+					dbg(
+						`generateWithPrompt[${promptTag}]: ${id} → empty, trying next`,
+					);
 					continue;
 				}
 				dbg(`generateWithPrompt[${promptTag}]: ${id} → "${result}"`);
 				return result;
 			} catch (err: any) {
-				dbg(`generateWithPrompt[${promptTag}]: ${id} FAILED:`, err?.message ?? err);
-				continue;
+				dbg(
+					`generateWithPrompt[${promptTag}]: ${id} FAILED:`,
+					err?.message ?? err,
+				);
 			}
 		}
 		dbg(`generateWithPrompt[${promptTag}]: all candidates exhausted`);
@@ -308,9 +366,15 @@ export default function nym(pi: ExtensionAPI) {
 			candidates = await resolveModelCandidates(ctx);
 		}
 
-		const llmCallback: DescriptionLLMFn = async (contextText: string) => {
+		const llmCallback: DescriptionLLMFn = async (
+			contextText: string,
+		) => {
 			if (candidates.length === 0) return "";
-			return generateWithPrompt(DESCRIPTION_PROMPT, contextText, candidates);
+			return generateWithPrompt(
+				DESCRIPTION_PROMPT,
+				contextText,
+				candidates,
+			);
 		};
 
 		return structuredName(ctx.cwd, piExec, context, llmCallback);
@@ -345,14 +409,22 @@ export default function nym(pi: ExtensionAPI) {
 		ctx: any,
 		options: { ignoreExistingName?: boolean } = {},
 	): Promise<void> {
-		dbg("autoName: enter", { ignoreExisting: options.ignoreExistingName, hasName: !!pi.getSessionName(), generating });
+		dbg("autoName: enter", {
+			ignoreExisting: options.ignoreExistingName,
+			hasName: !!pi.getSessionName(),
+			generating,
+		});
 		if (!isActive(ctx, options)) {
 			dbg("autoName: not active, skip");
 			return;
 		}
 
 		const context = gatherContext(ctx);
-		dbg("autoName: context length:", context.length, context ? `"${context.slice(0, 80)}..."` : "(empty)");
+		dbg(
+			"autoName: context length:",
+			context.length,
+			context ? `"${context.slice(0, 80)}..."` : "(empty)",
+		);
 		if (!context) {
 			dbg("autoName: no context, skip");
 			return;
@@ -368,7 +440,9 @@ export default function nym(pi: ExtensionAPI) {
 		generating = true;
 		showGenerating(ctx);
 		try {
-			const llmCallback: DescriptionLLMFn = async (contextText: string) => {
+			const llmCallback: DescriptionLLMFn = async (
+				contextText: string,
+			) => {
 				return generateWithPrompt(
 					DESCRIPTION_PROMPT,
 					contextText,
@@ -376,12 +450,17 @@ export default function nym(pi: ExtensionAPI) {
 				);
 			};
 
-			const name = await structuredName(ctx.cwd, piExec, context, llmCallback);
+			const name = await structuredName(
+				ctx.cwd,
+				piExec,
+				context,
+				llmCallback,
+			);
 			dbg("autoName: structuredName →", JSON.stringify(name));
 
 			// Multi-segment name (has ":") is good. A bare project name
 			// (no ":") needs a description appended via fallback.
-			if (name && name.includes(":")) {
+			if (name?.includes(":")) {
 				dbg("autoName: applying multi-segment name");
 				applyName(ctx, name, "auto");
 				return;
@@ -442,12 +521,14 @@ export default function nym(pi: ExtensionAPI) {
 			return;
 		}
 
-		dbg("forceAutoName: autoName didn't name, trying deriveStructuredSuggestion");
+		dbg(
+			"forceAutoName: autoName didn't name, trying deriveStructuredSuggestion",
+		);
 		const suggestion = await deriveStructuredSuggestion(ctx, {
 			allowEmptyContext: true,
 		});
 		dbg("forceAutoName: suggestion →", JSON.stringify(suggestion));
-		if (suggestion && suggestion.includes(":")) {
+		if (suggestion?.includes(":")) {
 			applyName(ctx, suggestion, "auto");
 			return;
 		}
@@ -457,11 +538,16 @@ export default function nym(pi: ExtensionAPI) {
 	}
 
 	pi.registerCommand("nym", {
-		description: "Auto-name session or set it explicitly (usage: /nym [new name])",
+		description:
+			"Auto-name session or set it explicitly (usage: /nym [new name])",
 		getArgumentCompletions: (argumentPrefix) => {
 			const current = pi.getSessionName()?.trim();
 			const suggested = suggestedName?.trim();
-			const completions: { value: string; label: string; description: string }[] = [];
+			const completions: {
+				value: string;
+				label: string;
+				description: string;
+			}[] = [];
 
 			if (current) {
 				if (!argumentPrefix || current.startsWith(argumentPrefix)) {
@@ -548,7 +634,12 @@ export default function nym(pi: ExtensionAPI) {
 
 		if (turnCount >= HARD_THRESHOLD && isActive(ctx)) {
 			await autoName(ctx);
-		} else if (turnCount >= SOFT_THRESHOLD && !softNotified && !pi.getSessionName() && ctx.hasUI) {
+		} else if (
+			turnCount >= SOFT_THRESHOLD &&
+			!softNotified &&
+			!pi.getSessionName() &&
+			ctx.hasUI
+		) {
 			softNotify(ctx);
 		}
 

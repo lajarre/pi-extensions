@@ -12,7 +12,10 @@
 
 import { completeSimple } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
+import {
+	convertToLlm,
+	serializeConversation,
+} from "@mariozechner/pi-coding-agent";
 
 const COMPACTION_PROVIDER = "anthropic";
 const COMPACTION_MODEL = "claude-opus-4-6";
@@ -21,18 +24,40 @@ const COMPACTION_THINKING: "xhigh" = "xhigh";
 export default function (pi: ExtensionAPI) {
 	pi.on("session_before_compact", async (event, ctx) => {
 		const { preparation, customInstructions, signal } = event;
-		const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary } = preparation;
+		const {
+			messagesToSummarize,
+			turnPrefixMessages,
+			tokensBefore,
+			firstKeptEntryId,
+			previousSummary,
+		} = preparation;
 
 		// Find Opus 4.6
-		const model = ctx.modelRegistry.find(COMPACTION_PROVIDER, COMPACTION_MODEL);
+		const model = ctx.modelRegistry.find(
+			COMPACTION_PROVIDER,
+			COMPACTION_MODEL,
+		);
 		if (!model) {
-			ctx.ui.notify(`⚠️ ${COMPACTION_MODEL} not found, falling back to default compaction`, "warning");
+			ctx.ui.notify(
+				`⚠️ ${COMPACTION_MODEL} not found, falling back to default compaction`,
+				"warning",
+			);
 			return;
 		}
 
-		const apiKey = await ctx.modelRegistry.getApiKey(model);
-		if (!apiKey) {
-			ctx.ui.notify(`⚠️ No API key for ${COMPACTION_PROVIDER}, falling back to default compaction`, "warning");
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok) {
+			ctx.ui.notify(
+				`⚠️ ${COMPACTION_MODEL} auth failed: ${auth.error} — falling back to default compaction`,
+				"warning",
+			);
+			return;
+		}
+		if (!auth.apiKey && !auth.headers) {
+			ctx.ui.notify(
+				`⚠️ No request auth for ${COMPACTION_PROVIDER}, falling back to default compaction`,
+				"warning",
+			);
 			return;
 		}
 
@@ -42,9 +67,15 @@ export default function (pi: ExtensionAPI) {
 			"info",
 		);
 
-		const conversationText = serializeConversation(convertToLlm(allMessages));
-		const previousContext = previousSummary ? `\n\nPrevious session summary for context:\n${previousSummary}` : "";
-		const customContext = customInstructions ? `\n\nAdditional focus instructions from the user:\n${customInstructions}` : "";
+		const conversationText = serializeConversation(
+			convertToLlm(allMessages),
+		);
+		const previousContext = previousSummary
+			? `\n\nPrevious session summary for context:\n${previousSummary}`
+			: "";
+		const customContext = customInstructions
+			? `\n\nAdditional focus instructions from the user:\n${customInstructions}`
+			: "";
 
 		const prompt = `You are a conversation summarizer. Create a comprehensive summary of this conversation that captures:${previousContext}${customContext}
 
@@ -66,21 +97,44 @@ ${conversationText}
 		try {
 			const response = await completeSimple(
 				model,
-				{ messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] },
-				{ apiKey, maxTokens: 8192, reasoning: COMPACTION_THINKING, signal },
+				{
+					messages: [
+						{
+							role: "user",
+							content: [{ type: "text", text: prompt }],
+							timestamp: Date.now(),
+						},
+					],
+				},
+				{
+					apiKey: auth.apiKey,
+					headers: auth.headers,
+					maxTokens: 8192,
+					reasoning: COMPACTION_THINKING,
+					signal,
+				},
 			);
 
 			const summary = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.filter(
+					(c): c is { type: "text"; text: string } => c.type === "text",
+				)
 				.map((c) => c.text)
 				.join("\n");
 
 			if (!summary.trim()) {
-				if (!signal.aborted) ctx.ui.notify("⚠️ Compaction summary was empty, falling back to default", "warning");
+				if (!signal.aborted)
+					ctx.ui.notify(
+						"⚠️ Compaction summary was empty, falling back to default",
+						"warning",
+					);
 				return;
 			}
 
-			ctx.ui.notify(`✅ Compacted with ${COMPACTION_MODEL}:${COMPACTION_THINKING}`, "info");
+			ctx.ui.notify(
+				`✅ Compacted with ${COMPACTION_MODEL}:${COMPACTION_THINKING}`,
+				"info",
+			);
 
 			return {
 				compaction: {
@@ -91,8 +145,12 @@ ${conversationText}
 			};
 		} catch (error) {
 			if (signal.aborted) return;
-			const message = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`⚠️ ${COMPACTION_MODEL} compaction failed: ${message} — falling back to default`, "warning");
+			const message =
+				error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(
+				`⚠️ ${COMPACTION_MODEL} compaction failed: ${message} — falling back to default`,
+				"warning",
+			);
 			return;
 		}
 	});

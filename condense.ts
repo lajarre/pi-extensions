@@ -28,12 +28,14 @@ Rules:
 
 type ResolvedModel = {
 	model: any;
-	apiKey: string;
+	apiKey?: string;
+	headers?: Record<string, string>;
 };
 
-async function resolveModelCandidates(
-	ctx: { modelRegistry: any; model: any },
-): Promise<ResolvedModel[]> {
+async function resolveModelCandidates(ctx: {
+	modelRegistry: any;
+	model: any;
+}): Promise<ResolvedModel[]> {
 	const candidates: ResolvedModel[] = [];
 	const seenProviders = new Set<string>();
 
@@ -45,22 +47,30 @@ async function resolveModelCandidates(
 		);
 
 		for (const model of sorted) {
-			const provider =
-				model.provider ?? model.id?.split("/")[0];
+			const provider = model.provider ?? model.id?.split("/")[0];
 			if (provider && seenProviders.has(provider)) continue;
 
-			const apiKey =
-				await ctx.modelRegistry.getApiKey(model);
-			if (!apiKey) continue;
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+			if (!auth.ok || (!auth.apiKey && !auth.headers)) continue;
 
 			if (provider) seenProviders.add(provider);
-			candidates.push({ model, apiKey });
+			candidates.push({
+				model,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+			});
 		}
 	}
 
 	if (candidates.length === 0 && ctx.model) {
-		const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-		if (apiKey) candidates.push({ model: ctx.model, apiKey });
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+		if (auth.ok && (auth.apiKey || auth.headers)) {
+			candidates.push({
+				model: ctx.model,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+			});
+		}
 	}
 
 	return candidates;
@@ -76,27 +86,24 @@ async function condenseText(
 		timestamp: Date.now(),
 	};
 
-	for (const { model, apiKey } of candidates) {
+	for (const { model, apiKey, headers } of candidates) {
 		try {
 			const response = await complete(
 				model,
 				{ systemPrompt: CONDENSE_PROMPT, messages: [message] },
-				{ apiKey, maxTokens: 2048 },
+				{ apiKey, headers, maxTokens: 2048 },
 			);
 
 			const result = response.content
 				.filter(
-					(c): c is { type: "text"; text: string } =>
-						c.type === "text",
+					(c): c is { type: "text"; text: string } => c.type === "text",
 				)
 				.map((c) => c.text)
 				.join("")
 				.trim();
 
 			if (result) return result;
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 
 	throw new Error("All model candidates exhausted");
@@ -127,20 +134,13 @@ export default function (pi: ExtensionAPI) {
 			}, 80);
 
 			try {
-				const candidates =
-					await resolveModelCandidates(ctx);
+				const candidates = await resolveModelCandidates(ctx);
 				if (candidates.length === 0) {
-					ctx.ui.notify(
-						"No model available for condensing",
-						"error",
-					);
+					ctx.ui.notify("No model available for condensing", "error");
 					return;
 				}
 
-				const condensed = await condenseText(
-					text,
-					candidates,
-				);
+				const condensed = await condenseText(text, candidates);
 				ctx.ui.setEditorText(condensed);
 				ctx.ui.notify(
 					"Condensed — review and press Enter to send",

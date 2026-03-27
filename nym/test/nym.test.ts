@@ -8,12 +8,13 @@
  */
 
 import assert from "node:assert/strict";
-import { describe, it, before, after } from "node:test";
+import { after, describe, it } from "node:test";
 import {
 	assembleSegments,
 	detectWorktree,
 	type ExecFn,
 	extractRepoName,
+	resolveArea,
 	resolveBranch,
 	resolveDescription,
 	resolvePR,
@@ -25,7 +26,6 @@ import {
 	structuredName,
 	truncateSegment,
 	type WorktreeInfo,
-	resolveArea,
 } from "../resolve.js";
 
 // ─── Isolate from mise env (AREA_SLUG etc.) ──────────────────────────────────
@@ -33,7 +33,8 @@ import {
 const savedAreaSlug = process.env.AREA_SLUG;
 delete process.env.AREA_SLUG;
 after(() => {
-	if (savedAreaSlug !== undefined) process.env.AREA_SLUG = savedAreaSlug;
+	if (savedAreaSlug !== undefined)
+		process.env.AREA_SLUG = savedAreaSlug;
 });
 
 // ─── Minimal Mock Harness ────────────────────────────────────────────────────
@@ -96,14 +97,20 @@ function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 					id: "u1",
 					parentId: null,
 					timestamp: new Date().toISOString(),
-					message: { role: "user", content: "Help me refactor the auth module" },
+					message: {
+						role: "user",
+						content: "Help me refactor the auth module",
+					},
 				},
 				{
 					type: "message",
 					id: "a1",
 					parentId: "u1",
 					timestamp: new Date().toISOString(),
-					message: { role: "assistant", content: [{ type: "text", text: "Sure, let me help." }] },
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "Sure, let me help." }],
+					},
 				},
 			];
 		},
@@ -111,13 +118,15 @@ function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 
 	const modelRegistry = {
 		getAvailable() {
-			return opts.hasModel === false ? [] : [expensiveModel, cheapModel];
+			return opts.hasModel === false
+				? []
+				: [expensiveModel, cheapModel];
 		},
 		find(_provider: string, _id: string) {
 			return cheapModel;
 		},
-		async getApiKey(_model: any) {
-			return "test-key";
+		async getApiKeyAndHeaders(_model: any) {
+			return { ok: true, apiKey: "test-key" };
 		},
 	};
 
@@ -260,7 +269,9 @@ function registerTestHandlers(
 		);
 	}
 
-	function gatherContext(ctx: { sessionManager: { getBranch(): any[] } }): string {
+	function gatherContext(ctx: {
+		sessionManager: { getBranch(): any[] };
+	}): string {
 		const entries = ctx.sessionManager.getBranch();
 		const MAX_CHARS = 500;
 		const MAX_MESSAGES = 3;
@@ -280,7 +291,8 @@ function registerTestHandlers(
 				text = content;
 			} else if (Array.isArray(content)) {
 				for (const block of content) {
-					if (block.type === "text" && block.text) text += `${block.text}\n`;
+					if (block.type === "text" && block.text)
+						text += `${block.text}\n`;
 				}
 			}
 
@@ -295,15 +307,31 @@ function registerTestHandlers(
 		const available = ctx.modelRegistry.getAvailable();
 		if (!Array.isArray(available) || available.length === 0) {
 			if (!ctx.model) return null;
-			const key = await ctx.modelRegistry.getApiKey(ctx.model);
-			return key ? { model: ctx.model, apiKey: key } : null;
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(
+				ctx.model,
+			);
+			return auth.ok && (auth.apiKey || auth.headers)
+				? {
+						model: ctx.model,
+						apiKey: auth.apiKey,
+						headers: auth.headers,
+					}
+				: null;
 		}
 		const sorted = [...available].sort(
-			(a: any, b: any) => (a.cost?.input ?? Infinity) - (b.cost?.input ?? Infinity),
+			(a: any, b: any) =>
+				(a.cost?.input ?? Infinity) - (b.cost?.input ?? Infinity),
 		);
 		for (const candidate of sorted) {
-			const key = await ctx.modelRegistry.getApiKey(candidate);
-			if (key) return { model: candidate, apiKey: key };
+			const auth =
+				await ctx.modelRegistry.getApiKeyAndHeaders(candidate);
+			if (auth.ok && (auth.apiKey || auth.headers)) {
+				return {
+					model: candidate,
+					apiKey: auth.apiKey,
+					headers: auth.headers,
+				};
+			}
 		}
 		return null;
 	}
@@ -358,7 +386,9 @@ function registerTestHandlers(
 			if (opts.autoNameFails) throw new Error("LLM failed");
 
 			const structuredRaw =
-				opts.structuredResult ?? opts.autoNameResult ?? "test-session-name";
+				opts.structuredResult ??
+				opts.autoNameResult ??
+				"test-session-name";
 			const structured = structuredRaw.trim().slice(0, 60);
 			if (structured) {
 				api.setSessionName(structured);
@@ -406,7 +436,8 @@ function registerTestHandlers(
 	}
 
 	api.registerCommand("nym", {
-		description: "Auto-name session or set it explicitly (usage: /nym [new name])",
+		description:
+			"Auto-name session or set it explicitly (usage: /nym [new name])",
 		getArgumentCompletions: (prefix: string) => {
 			const current = api.getSessionName()?.trim();
 			const value = current || suggestedName?.trim();
@@ -513,7 +544,10 @@ describe("truncateSegment", () => {
 	});
 
 	it("should truncate at max with ellipsis", () => {
-		assert.equal(truncateSegment("very-long-branch-name", 12), "very-long-br…");
+		assert.equal(
+			truncateSegment("very-long-branch-name", 12),
+			"very-long-br…",
+		);
 	});
 
 	it("should handle exact length", () => {
@@ -533,21 +567,39 @@ describe("detectWorktree", () => {
 	it("should detect linked worktree", async () => {
 		const exec: ExecFn = async (_cmd, args) => {
 			if (args.includes("--show-toplevel")) {
-				return { stdout: "/home/user/.tree/feat-new-app\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "/home/user/.tree/feat-new-app\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (args.includes("--git-common-dir")) {
-				return { stdout: "../../main-repo/.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "../../main-repo/.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			return { stdout: "", stderr: "", exitCode: 1 };
 		};
-		const result = await detectWorktree("/home/user/.tree/feat-new-app", exec);
-		assert.deepEqual(result, { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" });
+		const result = await detectWorktree(
+			"/home/user/.tree/feat-new-app",
+			exec,
+		);
+		assert.deepEqual(result, {
+			isLinkedWorktree: true,
+			worktreeLeaf: "feat-new-app",
+		});
 	});
 
 	it("should detect main worktree (not linked)", async () => {
 		const exec: ExecFn = async (_cmd, args) => {
 			if (args.includes("--show-toplevel")) {
-				return { stdout: "/home/user/main-repo\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "/home/user/main-repo\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (args.includes("--git-common-dir")) {
 				return { stdout: ".git\n", stderr: "", exitCode: 0 };
@@ -555,29 +607,53 @@ describe("detectWorktree", () => {
 			return { stdout: "", stderr: "", exitCode: 1 };
 		};
 		const result = await detectWorktree("/home/user/main-repo", exec);
-		assert.deepEqual(result, { isLinkedWorktree: false, worktreeLeaf: null });
+		assert.deepEqual(result, {
+			isLinkedWorktree: false,
+			worktreeLeaf: null,
+		});
 	});
 
 	it("should handle non-git directory", async () => {
 		const exec: ExecFn = async () => {
-			return { stdout: "", stderr: "fatal: not a git repository", exitCode: 128 };
+			return {
+				stdout: "",
+				stderr: "fatal: not a git repository",
+				exitCode: 128,
+			};
 		};
 		const result = await detectWorktree("/home/user/plain-dir", exec);
-		assert.deepEqual(result, { isLinkedWorktree: false, worktreeLeaf: null });
+		assert.deepEqual(result, {
+			isLinkedWorktree: false,
+			worktreeLeaf: null,
+		});
 	});
 
 	it("should handle absolute git-common-dir outside toplevel", async () => {
 		const exec: ExecFn = async (_cmd, args) => {
 			if (args.includes("--show-toplevel")) {
-				return { stdout: "/home/user/.tree/fix-bug\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "/home/user/.tree/fix-bug\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (args.includes("--git-common-dir")) {
-				return { stdout: "/home/user/main-repo/.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "/home/user/main-repo/.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			return { stdout: "", stderr: "", exitCode: 1 };
 		};
-		const result = await detectWorktree("/home/user/.tree/fix-bug", exec);
-		assert.deepEqual(result, { isLinkedWorktree: true, worktreeLeaf: "fix-bug" });
+		const result = await detectWorktree(
+			"/home/user/.tree/fix-bug",
+			exec,
+		);
+		assert.deepEqual(result, {
+			isLinkedWorktree: true,
+			worktreeLeaf: "fix-bug",
+		});
 	});
 });
 
@@ -623,19 +699,31 @@ describe("stripWorktreePrefix", () => {
 
 describe("extractRepoName", () => {
 	it("should parse SSH remote URL", () => {
-		assert.equal(extractRepoName("git@github.com:org/repo.git"), "repo");
+		assert.equal(
+			extractRepoName("git@github.com:org/repo.git"),
+			"repo",
+		);
 	});
 
 	it("should parse HTTPS remote URL with .git", () => {
-		assert.equal(extractRepoName("https://github.com/org/repo.git"), "repo");
+		assert.equal(
+			extractRepoName("https://github.com/org/repo.git"),
+			"repo",
+		);
 	});
 
 	it("should parse HTTPS remote URL without .git", () => {
-		assert.equal(extractRepoName("https://github.com/org/repo"), "repo");
+		assert.equal(
+			extractRepoName("https://github.com/org/repo"),
+			"repo",
+		);
 	});
 
 	it("should parse SSH protocol URL", () => {
-		assert.equal(extractRepoName("ssh://git@github.com/org/repo.git"), "repo");
+		assert.equal(
+			extractRepoName("ssh://git@github.com/org/repo.git"),
+			"repo",
+		);
 	});
 
 	it("should return null for empty string", () => {
@@ -643,7 +731,10 @@ describe("extractRepoName", () => {
 	});
 
 	it("should handle URL with trailing whitespace", () => {
-		assert.equal(extractRepoName("git@github.com:org/repo.git\n"), "repo");
+		assert.equal(
+			extractRepoName("git@github.com:org/repo.git\n"),
+			"repo",
+		);
 	});
 });
 
@@ -676,7 +767,11 @@ describe("resolveProject", () => {
 	it("should use PROJECT_SLUG when set", async () => {
 		process.env.PROJECT_SLUG = "my-proj";
 		try {
-			const exec: ExecFn = async () => ({ stdout: "git@github.com:org/other.git\n", stderr: "", exitCode: 0 });
+			const exec: ExecFn = async () => ({
+				stdout: "git@github.com:org/other.git\n",
+				stderr: "",
+				exitCode: 0,
+			});
 			const result = await resolveProject("/some/repo", exec);
 			assert.equal(result, "my-proj");
 		} finally {
@@ -688,7 +783,11 @@ describe("resolveProject", () => {
 		process.env.AREA_SLUG = "aidev";
 		process.env.PROJECT_SLUG = "aidev";
 		try {
-			const exec: ExecFn = async () => ({ stdout: "", stderr: "", exitCode: 1 });
+			const exec: ExecFn = async () => ({
+				stdout: "",
+				stderr: "",
+				exitCode: 1,
+			});
 			const result = await resolveProject("/some/path", exec);
 			assert.equal(result, null);
 		} finally {
@@ -715,7 +814,11 @@ describe("resolveProject", () => {
 	it("should extract short repo name without truncation", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "https://github.com/org/nym.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "https://github.com/org/nym.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			return { stdout: "", stderr: "", exitCode: 1 };
 		};
@@ -725,7 +828,11 @@ describe("resolveProject", () => {
 
 	it("should fall back to cwd basename when no git remote", async () => {
 		const exec: ExecFn = async () => {
-			return { stdout: "", stderr: "fatal: not a git repository", exitCode: 128 };
+			return {
+				stdout: "",
+				stderr: "fatal: not a git repository",
+				exitCode: 128,
+			};
 		};
 		const result = await resolveProject("/home/user/my-project", exec);
 		assert.equal(result, "my-project");
@@ -735,14 +842,21 @@ describe("resolveProject", () => {
 		const exec: ExecFn = async () => {
 			return { stdout: "", stderr: "fatal", exitCode: 128 };
 		};
-		const result = await resolveProject("/home/user/very-long-project-name", exec);
+		const result = await resolveProject(
+			"/home/user/very-long-project-name",
+			exec,
+		);
 		assert.equal(result, "very-long-pr…");
 	});
 
 	it("should handle HTTPS URL without .git suffix", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "https://github.com/org/my-repo\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "https://github.com/org/my-repo\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			return { stdout: "", stderr: "", exitCode: 1 };
 		};
@@ -754,19 +868,28 @@ describe("resolveProject", () => {
 		const exec: ExecFn = async () => {
 			throw new Error("nope");
 		};
-		const result = await resolveProject("/home/user/fallback-dir", exec);
+		const result = await resolveProject(
+			"/home/user/fallback-dir",
+			exec,
+		);
 		assert.equal(result, "fallback-dir");
 	});
 });
 
 describe("resolveWorktreeName", () => {
 	it("should return stripped worktree leaf for linked worktree", () => {
-		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" };
+		const wt: WorktreeInfo = {
+			isLinkedWorktree: true,
+			worktreeLeaf: "feat-new-app",
+		};
 		assert.equal(resolveWorktreeName(wt), "new-app");
 	});
 
 	it("should return null for non-linked worktree", () => {
-		const wt: WorktreeInfo = { isLinkedWorktree: false, worktreeLeaf: null };
+		const wt: WorktreeInfo = {
+			isLinkedWorktree: false,
+			worktreeLeaf: null,
+		};
 		assert.equal(resolveWorktreeName(wt), null);
 	});
 
@@ -779,17 +902,26 @@ describe("resolveWorktreeName", () => {
 	});
 
 	it("should handle worktree leaf without conventional prefix", () => {
-		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: "my-feature" };
+		const wt: WorktreeInfo = {
+			isLinkedWorktree: true,
+			worktreeLeaf: "my-feature",
+		};
 		assert.equal(resolveWorktreeName(wt), "my-feature");
 	});
 
 	it("should handle worktree with null leaf", () => {
-		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: null };
+		const wt: WorktreeInfo = {
+			isLinkedWorktree: true,
+			worktreeLeaf: null,
+		};
 		assert.equal(resolveWorktreeName(wt), null);
 	});
 
 	it("should strip fix- prefix", () => {
-		const wt: WorktreeInfo = { isLinkedWorktree: true, worktreeLeaf: "fix-auth-bug" };
+		const wt: WorktreeInfo = {
+			isLinkedWorktree: true,
+			worktreeLeaf: "fix-auth-bug",
+		};
 		assert.equal(resolveWorktreeName(wt), "auth-bug");
 	});
 });
@@ -798,7 +930,11 @@ describe("resolveBranch", () => {
 	it("should return stripped branch name", async () => {
 		const exec: ExecFn = async (_cmd, args) => {
 			if (args.includes("--show-current")) {
-				return { stdout: "feat/42-auth-refactor\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "feat/42-auth-refactor\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			return { stdout: "", stderr: "", exitCode: 1 };
 		};
@@ -808,49 +944,77 @@ describe("resolveBranch", () => {
 	});
 
 	it("should skip main branch", async () => {
-		const exec: ExecFn = async () => ({ stdout: "main\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "main\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, null);
 	});
 
 	it("should skip master branch", async () => {
-		const exec: ExecFn = async () => ({ stdout: "master\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "master\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, null);
 	});
 
 	it("should skip when branch slug matches worktree leaf (both prefix-stripped)", async () => {
-		const exec: ExecFn = async () => ({ stdout: "feat/new-app\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "feat/new-app\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const wt = { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, null);
 	});
 
 	it("should include branch when different from worktree leaf", async () => {
-		const exec: ExecFn = async () => ({ stdout: "pr/7-live-prices\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "pr/7-live-prices\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const wt = { isLinkedWorktree: true, worktreeLeaf: "feat-new-app" };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, "7-live-price…");
 	});
 
 	it("should return short branch without truncation", async () => {
-		const exec: ExecFn = async () => ({ stdout: "feat/login\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "feat/login\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, "login");
 	});
 
 	it("should handle git failure gracefully", async () => {
-		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "fatal",
+			exitCode: 128,
+		});
 		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, null);
 	});
 
 	it("should handle detached HEAD", async () => {
-		const exec: ExecFn = async () => ({ stdout: "\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const wt = { isLinkedWorktree: false, worktreeLeaf: null };
 		const result = await resolveBranch("/repo", exec, wt);
 		assert.equal(result, null);
@@ -859,7 +1023,11 @@ describe("resolveBranch", () => {
 
 describe("resolvePR", () => {
 	it("should return pr<N> on success", async () => {
-		const exec: ExecFn = async () => ({ stdout: "42\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "42\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const result = await resolvePR("/repo", exec);
 		assert.equal(result, "pr42");
 	});
@@ -893,7 +1061,11 @@ describe("resolvePR", () => {
 	});
 
 	it("should return null for non-numeric output", async () => {
-		const exec: ExecFn = async () => ({ stdout: "not-a-number\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "not-a-number\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const result = await resolvePR("/repo", exec);
 		assert.equal(result, null);
 	});
@@ -911,31 +1083,60 @@ describe("resolvePR", () => {
 
 describe("resolveSubfolder", () => {
 	it("should return null when at project root", async () => {
-		const exec: ExecFn = async () => ({ stdout: "/home/user/project\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "/home/user/project\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const result = await resolveSubfolder("/home/user/project", exec);
 		assert.equal(result, null);
 	});
 
 	it("should return slugified relative path for nested cwd", async () => {
-		const exec: ExecFn = async () => ({ stdout: "/home/user/project\n", stderr: "", exitCode: 0 });
-		const result = await resolveSubfolder("/home/user/project/pkg/worker", exec);
+		const exec: ExecFn = async () => ({
+			stdout: "/home/user/project\n",
+			stderr: "",
+			exitCode: 0,
+		});
+		const result = await resolveSubfolder(
+			"/home/user/project/pkg/worker",
+			exec,
+		);
 		assert.equal(result, "pkg-worker");
 	});
 
 	it("should truncate long subfolder paths", async () => {
-		const exec: ExecFn = async () => ({ stdout: "/home/user/project\n", stderr: "", exitCode: 0 });
-		const result = await resolveSubfolder("/home/user/project/packages/very-long-name/src", exec);
+		const exec: ExecFn = async () => ({
+			stdout: "/home/user/project\n",
+			stderr: "",
+			exitCode: 0,
+		});
+		const result = await resolveSubfolder(
+			"/home/user/project/packages/very-long-name/src",
+			exec,
+		);
 		assert.equal(result, "packages-ver…");
 	});
 
 	it("should return null for non-git directory (no project.org fallback in tests)", async () => {
-		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
-		const result = await resolveSubfolder("/home/user/plain-dir/sub", exec);
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "fatal",
+			exitCode: 128,
+		});
+		const result = await resolveSubfolder(
+			"/home/user/plain-dir/sub",
+			exec,
+		);
 		assert.equal(result, null);
 	});
 
 	it("should handle single-level nesting", async () => {
-		const exec: ExecFn = async () => ({ stdout: "/repo\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "/repo\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const result = await resolveSubfolder("/repo/src", exec);
 		assert.equal(result, "src");
 	});
@@ -943,7 +1144,12 @@ describe("resolveSubfolder", () => {
 
 describe("assembleSegments", () => {
 	it("should join all segments with colon", () => {
-		const result = assembleSegments(["42-auth", "pr42", "pkg-worker", "token-handler"]);
+		const result = assembleSegments([
+			"42-auth",
+			"pr42",
+			"pkg-worker",
+			"token-handler",
+		]);
 		assert.equal(result, "42-auth:pr42:pkg-worker:token-handler");
 	});
 
@@ -956,16 +1162,31 @@ describe("assembleSegments", () => {
 			"pkg-worker",
 			"token-handler",
 		]);
-		assert.equal(result, "myproj:new-app:42-auth:pr42:pkg-worker:token-handler");
+		assert.equal(
+			result,
+			"myproj:new-app:42-auth:pr42:pkg-worker:token-handler",
+		);
 	});
 
 	it("should filter null project and worktree segments", () => {
-		const result = assembleSegments([null, null, "42-auth", "pr42", null, "ordering-fix"]);
+		const result = assembleSegments([
+			null,
+			null,
+			"42-auth",
+			"pr42",
+			null,
+			"ordering-fix",
+		]);
 		assert.equal(result, "42-auth:pr42:ordering-fix");
 	});
 
 	it("should filter null segments", () => {
-		const result = assembleSegments([null, "pr42", null, "ordering-fix"]);
+		const result = assembleSegments([
+			null,
+			"pr42",
+			null,
+			"ordering-fix",
+		]);
 		assert.equal(result, "pr42:ordering-fix");
 	});
 
@@ -993,7 +1214,10 @@ describe("assembleSegments", () => {
 describe("resolveDescription", () => {
 	it("should return LLM-generated description", async () => {
 		const llm = async (_context: string) => "refactor-auth";
-		const result = await resolveDescription("Help me refactor auth", llm);
+		const result = await resolveDescription(
+			"Help me refactor auth",
+			llm,
+		);
 		assert.equal(result, "refactor-auth");
 	});
 
@@ -1034,16 +1258,28 @@ describe("structuredName", () => {
 	it("should produce full structured name with all segments", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("--show-toplevel")) {
-				return { stdout: "/home/.tree/feat-new-app\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "/home/.tree/feat-new-app\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "git" && args.includes("--git-common-dir")) {
 				return { stdout: "/home/main/.git\n", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args.includes("--show-current")) {
-				return { stdout: "pr/7-live-prices\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "pr/7-live-prices\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "git@github.com:org/myproj.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "git@github.com:org/myproj.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "gh") {
 				return { stdout: "70\n", stderr: "", exitCode: 0 };
@@ -1052,8 +1288,16 @@ describe("structuredName", () => {
 		};
 		const llm = async () => "review-triage";
 
-		const result = await structuredName("/home/.tree/feat-new-app", exec, "context", llm);
-		assert.equal(result, "myproj:new-app:7-live-price…:pr70:review-triage");
+		const result = await structuredName(
+			"/home/.tree/feat-new-app",
+			exec,
+			"context",
+			llm,
+		);
+		assert.equal(
+			result,
+			"myproj:new-app:7-live-price…:pr70:review-triage",
+		);
 	});
 
 	it("should produce description-only when on main with no PR", async () => {
@@ -1068,7 +1312,11 @@ describe("structuredName", () => {
 				return { stdout: "main\n", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "https://github.com/org/myrepo.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "gh") {
 				return { stdout: "", stderr: "no PR", exitCode: 1 };
@@ -1082,7 +1330,11 @@ describe("structuredName", () => {
 	});
 
 	it("should return project-only when all other resolvers fail", async () => {
-		const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+		const exec: ExecFn = async () => ({
+			stdout: "",
+			stderr: "fatal",
+			exitCode: 128,
+		});
 		const llm = async () => {
 			throw new Error("fail");
 		};
@@ -1096,7 +1348,11 @@ describe("structuredName", () => {
 		try {
 			const exec: ExecFn = async (cmd, args) => {
 				if (cmd === "git" && args.includes("get-url")) {
-					return { stdout: "git@github.com:org/myrepo.git\n", stderr: "", exitCode: 0 };
+					return {
+						stdout: "git@github.com:org/myrepo.git\n",
+						stderr: "",
+						exitCode: 0,
+					};
 				}
 				if (args.includes("--show-toplevel")) {
 					return { stdout: "/repo\n", stderr: "", exitCode: 0 };
@@ -1113,7 +1369,12 @@ describe("structuredName", () => {
 				return { stdout: "", stderr: "", exitCode: 1 };
 			};
 			const llm = async () => "debug-cache";
-			const result = await structuredName("/repo", exec, "context", llm);
+			const result = await structuredName(
+				"/repo",
+				exec,
+				"context",
+				llm,
+			);
 			assert.equal(result, "aidev:myrepo:debug-cache");
 		} finally {
 			delete process.env.AREA_SLUG;
@@ -1123,9 +1384,18 @@ describe("structuredName", () => {
 	it("should dedup area and project when they match", async () => {
 		process.env.AREA_SLUG = "aidev";
 		try {
-			const exec: ExecFn = async () => ({ stdout: "", stderr: "fatal", exitCode: 128 });
+			const exec: ExecFn = async () => ({
+				stdout: "",
+				stderr: "fatal",
+				exitCode: 128,
+			});
 			const llm = async () => "session-review";
-			const result = await structuredName("/home/user/aidev", exec, "context", llm);
+			const result = await structuredName(
+				"/home/user/aidev",
+				exec,
+				"context",
+				llm,
+			);
 			// project would be "aidev" (basename) which matches area — deduped
 			assert.equal(result, "aidev:session-review");
 		} finally {
@@ -1145,7 +1415,11 @@ describe("structuredName", () => {
 				return { stdout: "main\n", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "https://github.com/org/myrepo.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "gh") {
 				return { stdout: "70\n", stderr: "", exitCode: 0 };
@@ -1154,7 +1428,12 @@ describe("structuredName", () => {
 		};
 		const llm = async () => "cache-refactor";
 
-		const result = await structuredName("/repo/pkg/worker", exec, "context", llm);
+		const result = await structuredName(
+			"/repo/pkg/worker",
+			exec,
+			"context",
+			llm,
+		);
 		assert.equal(result, "myrepo:pr70:pkg-worker:cache-refactor");
 	});
 });
@@ -1169,10 +1448,18 @@ describe("structured naming integration", () => {
 				return { stdout: ".git\n", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args.includes("--show-current")) {
-				return { stdout: "feat/42-auth-refactor\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "feat/42-auth-refactor\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "https://github.com/org/myrepo.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "gh") {
 				return { stdout: "42\n", stderr: "", exitCode: 0 };
@@ -1188,16 +1475,28 @@ describe("structured naming integration", () => {
 	it("should produce project:worktree:pr:subfolder:description when branch matches worktree", async () => {
 		const exec: ExecFn = async (cmd, args) => {
 			if (cmd === "git" && args.includes("--show-toplevel")) {
-				return { stdout: "/home/user/.tree/feat-new-app\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "/home/user/.tree/feat-new-app\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "git" && args.includes("--git-common-dir")) {
-				return { stdout: "/home/user/main/.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "/home/user/main/.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "git" && args.includes("--show-current")) {
 				return { stdout: "feat/new-app\n", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "git@github.com:org/myproj.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "git@github.com:org/myproj.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "gh") {
 				return { stdout: "70\n", stderr: "", exitCode: 0 };
@@ -1206,8 +1505,16 @@ describe("structured naming integration", () => {
 		};
 		const llm = async () => "cache-refactor";
 
-		const result = await structuredName("/home/user/.tree/feat-new-app/pkg/worker", exec, "context", llm);
-		assert.equal(result, "myproj:new-app:pr70:pkg-worker:cache-refactor");
+		const result = await structuredName(
+			"/home/user/.tree/feat-new-app/pkg/worker",
+			exec,
+			"context",
+			llm,
+		);
+		assert.equal(
+			result,
+			"myproj:new-app:pr70:pkg-worker:cache-refactor",
+		);
 	});
 
 	it("should produce project:description on main without PR", async () => {
@@ -1222,7 +1529,11 @@ describe("structured naming integration", () => {
 				return { stdout: "main\n", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args.includes("get-url")) {
-				return { stdout: "https://github.com/org/myrepo.git\n", stderr: "", exitCode: 0 };
+				return {
+					stdout: "https://github.com/org/myrepo.git\n",
+					stderr: "",
+					exitCode: 0,
+				};
 			}
 			if (cmd === "gh") {
 				return { stdout: "", stderr: "no pull request", exitCode: 1 };
@@ -1244,7 +1555,12 @@ describe("structured naming integration", () => {
 		const llm = async () => {
 			throw new Error("description failed");
 		};
-		const result = await structuredName("/plain-dir", exec, "context", llm);
+		const result = await structuredName(
+			"/plain-dir",
+			exec,
+			"context",
+			llm,
+		);
 		assert.equal(result, "plain-dir");
 	});
 });
@@ -1272,7 +1588,11 @@ describe("fallback behavior", () => {
 		await mock.fire("session_compact");
 
 		assert.equal(mock.getSessionName(), undefined);
-		assert.ok(mock.notifications.some((n) => n.message.includes("Session unnamed")));
+		assert.ok(
+			mock.notifications.some((n) =>
+				n.message.includes("Session unnamed"),
+			),
+		);
 	});
 });
 
@@ -1280,7 +1600,9 @@ describe("/nym vs auto-triggers", () => {
 	it("auto-trigger (compaction) should NOT overwrite existing name", async () => {
 		const mock = createMockPi();
 		mock.setSessionName("existing-name");
-		registerTestHandlers(mock.api, { structuredResult: "should-not-apply" });
+		registerTestHandlers(mock.api, {
+			structuredResult: "should-not-apply",
+		});
 		await mock.fire("session_start");
 
 		await mock.fire("session_compact");
@@ -1291,7 +1613,9 @@ describe("/nym vs auto-triggers", () => {
 	it("/nym with no args SHOULD overwrite existing name", async () => {
 		const mock = createMockPi();
 		mock.setSessionName("existing-name");
-		registerTestHandlers(mock.api, { structuredResult: "forced-new-name" });
+		registerTestHandlers(mock.api, {
+			structuredResult: "forced-new-name",
+		});
 		await mock.fire("session_start");
 
 		await mock.runCommand("nym", "");
@@ -1314,14 +1638,25 @@ describe("segment edge cases", () => {
 	});
 
 	it("PR numbers should stay naturally short", async () => {
-		const exec: ExecFn = async () => ({ stdout: "7\n", stderr: "", exitCode: 0 });
+		const exec: ExecFn = async () => ({
+			stdout: "7\n",
+			stderr: "",
+			exitCode: 0,
+		});
 		const result = await resolvePR("/repo", exec);
 		assert.equal(result, "pr7");
 	});
 
 	it("deeply nested subfolder should truncate with ellipsis", async () => {
-		const exec: ExecFn = async () => ({ stdout: "/repo\n", stderr: "", exitCode: 0 });
-		const result = await resolveSubfolder("/repo/packages/deep/nested/path/module", exec);
+		const exec: ExecFn = async () => ({
+			stdout: "/repo\n",
+			stderr: "",
+			exitCode: 0,
+		});
+		const result = await resolveSubfolder(
+			"/repo/packages/deep/nested/path/module",
+			exec,
+		);
 		assert.equal(result, "packages-dee…");
 	});
 });
@@ -1339,7 +1674,11 @@ describe("nym", () => {
 				await mock.fire("turn_end");
 			}
 
-			assert.equal(mock.notifications.length, 0, "Should not nag when already named");
+			assert.equal(
+				mock.notifications.length,
+				0,
+				"Should not nag when already named",
+			);
 		});
 
 		it("should reset state on session_switch", async () => {
@@ -1359,7 +1698,11 @@ describe("nym", () => {
 				await mock.fire("turn_end");
 			}
 
-			assert.equal(mock.notifications.length, 0, "Should not nag after switch to named session");
+			assert.equal(
+				mock.notifications.length,
+				0,
+				"Should not nag after switch to named session",
+			);
 		});
 
 		it("should reset state on session_fork", async () => {
@@ -1382,7 +1725,11 @@ describe("nym", () => {
 				await mock.fire("turn_end");
 			}
 
-			assert.equal(mock.notifications.length, softCount, "No new notifications after fork to named session");
+			assert.equal(
+				mock.notifications.length,
+				softCount,
+				"No new notifications after fork to named session",
+			);
 		});
 	});
 
@@ -1426,7 +1773,10 @@ describe("nym", () => {
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
 
-			assert.equal(capturedContext, "latest user\nnewer user\nmiddle user");
+			assert.equal(
+				capturedContext,
+				"latest user\nnewer user\nmiddle user",
+			);
 		});
 
 		it("should cap gathered context at 500 chars", async () => {
@@ -1466,7 +1816,10 @@ describe("nym", () => {
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
 
-			assert.equal(mock.getSessionName(), "branch:pr42:pkg-worker:debug-cache");
+			assert.equal(
+				mock.getSessionName(),
+				"branch:pr42:pkg-worker:debug-cache",
+			);
 		});
 
 		it("should fall back to old-style name when structured result is empty", async () => {
@@ -1491,7 +1844,11 @@ describe("nym", () => {
 			await mock.fire("session_compact");
 
 			assert.equal(mock.getSessionName(), undefined);
-			assert.ok(mock.notifications.some((n) => n.message.includes("Session unnamed")));
+			assert.ok(
+				mock.notifications.some((n) =>
+					n.message.includes("Session unnamed"),
+				),
+			);
 		});
 	});
 
@@ -1506,7 +1863,9 @@ describe("nym", () => {
 
 		it("should auto-name on /nym with no args", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { structuredResult: "forced-rename" });
+			registerTestHandlers(mock.api, {
+				structuredResult: "forced-rename",
+			});
 			await mock.fire("session_start");
 
 			await mock.runCommand("nym", "");
@@ -1516,7 +1875,9 @@ describe("nym", () => {
 
 		it("should intercept enter for bare /nym in the editor", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { structuredResult: "forced-rename" });
+			registerTestHandlers(mock.api, {
+				structuredResult: "forced-rename",
+			});
 			await mock.fire("session_start");
 			mock.setEditorText("/nym");
 
@@ -1530,7 +1891,9 @@ describe("nym", () => {
 
 		it("should intercept enter for /nym with trailing space", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { structuredResult: "forced-rename" });
+			registerTestHandlers(mock.api, {
+				structuredResult: "forced-rename",
+			});
 			await mock.fire("session_start");
 			mock.setEditorText("/nym ");
 
@@ -1544,14 +1907,18 @@ describe("nym", () => {
 
 		it("should set explicit names with /nym <name>", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { structuredResult: "ignored-auto-name" });
+			registerTestHandlers(mock.api, {
+				structuredResult: "ignored-auto-name",
+			});
 			await mock.fire("session_start");
 
 			await mock.runCommand("nym", "manual-name");
 
 			assert.equal(mock.getSessionName(), "manual-name");
 			assert.ok(
-				mock.notifications.some((n) => n.message.includes("Session named: manual-name")),
+				mock.notifications.some((n) =>
+					n.message.includes("Session named: manual-name"),
+				),
 			);
 		});
 
@@ -1573,7 +1940,9 @@ describe("nym", () => {
 
 		it("should tab-complete with a suggested name when unnamed", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { suggestedResult: "project:branch:suggested" });
+			registerTestHandlers(mock.api, {
+				suggestedResult: "project:branch:suggested",
+			});
 			await mock.fire("session_start");
 
 			const completions = mock.getCommandCompletions("nym", "");
@@ -1588,12 +1957,13 @@ describe("nym", () => {
 
 		it("should filter /nym completions by prefix", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { suggestedResult: "project:branch:suggested" });
+			registerTestHandlers(mock.api, {
+				suggestedResult: "project:branch:suggested",
+			});
 			await mock.fire("session_start");
 
 			assert.equal(mock.getCommandCompletions("nym", "zzz"), null);
 		});
-
 	});
 
 	describe("soft trigger (≥10 turns)", () => {
@@ -1606,7 +1976,11 @@ describe("nym", () => {
 				await mock.fire("turn_end");
 			}
 
-			assert.equal(mock.notifications.length, 1, "Should notify exactly once at 10 turns");
+			assert.equal(
+				mock.notifications.length,
+				1,
+				"Should notify exactly once at 10 turns",
+			);
 			assert.ok(
 				mock.notifications[0].message.includes("/nym"),
 				"Notification should mention /nym command",
@@ -1625,7 +1999,11 @@ describe("nym", () => {
 			const softNotifs = mock.notifications.filter((n) =>
 				n.message.includes("Session unnamed"),
 			);
-			assert.equal(softNotifs.length, 1, "Soft notification should fire exactly once");
+			assert.equal(
+				softNotifs.length,
+				1,
+				"Soft notification should fire exactly once",
+			);
 		});
 
 		it("should not notify before 10 turns", async () => {
@@ -1637,30 +2015,46 @@ describe("nym", () => {
 				await mock.fire("turn_end");
 			}
 
-			assert.equal(mock.notifications.length, 0, "No notification before threshold");
+			assert.equal(
+				mock.notifications.length,
+				0,
+				"No notification before threshold",
+			);
 		});
 	});
 
 	describe("hard trigger (≥50 turns)", () => {
 		it("should auto-name at 50 turns", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { autoNameResult: "refactor-auth-module" });
+			registerTestHandlers(mock.api, {
+				autoNameResult: "refactor-auth-module",
+			});
 			await mock.fire("session_start");
 
 			for (let i = 0; i < 50; i++) {
 				await mock.fire("turn_end");
 			}
 
-			assert.equal(mock.getSessionName(), "refactor-auth-module", "Should auto-name at 50 turns");
+			assert.equal(
+				mock.getSessionName(),
+				"refactor-auth-module",
+				"Should auto-name at 50 turns",
+			);
 			const autoNotifs = mock.notifications.filter((n) =>
 				n.message.includes("Auto-named"),
 			);
-			assert.equal(autoNotifs.length, 1, "Should notify about auto-naming");
+			assert.equal(
+				autoNotifs.length,
+				1,
+				"Should notify about auto-naming",
+			);
 		});
 
 		it("should not auto-name again after naming", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { autoNameResult: "refactor-auth-module" });
+			registerTestHandlers(mock.api, {
+				autoNameResult: "refactor-auth-module",
+			});
 			await mock.fire("session_start");
 
 			for (let i = 0; i < 100; i++) {
@@ -1677,14 +2071,18 @@ describe("nym", () => {
 	describe("hard trigger (compaction)", () => {
 		it("should auto-name on compaction", async () => {
 			const mock = createMockPi();
-			registerTestHandlers(mock.api, { autoNameResult: "shaping-session-naming" });
+			registerTestHandlers(mock.api, {
+				autoNameResult: "shaping-session-naming",
+			});
 			await mock.fire("session_start");
 
 			await mock.fire("session_compact");
 
 			assert.equal(mock.getSessionName(), "shaping-session-naming");
 			assert.ok(
-				mock.notifications.some((n) => n.message.includes("Auto-named")),
+				mock.notifications.some((n) =>
+					n.message.includes("Auto-named"),
+				),
 				"Should notify about auto-naming on compaction",
 			);
 		});
@@ -1692,12 +2090,18 @@ describe("nym", () => {
 		it("should not auto-name on compaction if already named", async () => {
 			const mock = createMockPi();
 			mock.setSessionName("already-named");
-			registerTestHandlers(mock.api, { autoNameResult: "should-not-appear" });
+			registerTestHandlers(mock.api, {
+				autoNameResult: "should-not-appear",
+			});
 			await mock.fire("session_start");
 
 			await mock.fire("session_compact");
 
-			assert.equal(mock.getSessionName(), "already-named", "Name should not change");
+			assert.equal(
+				mock.getSessionName(),
+				"already-named",
+				"Name should not change",
+			);
 			assert.equal(mock.notifications.length, 0, "No notifications");
 		});
 	});
@@ -1714,8 +2118,16 @@ describe("nym", () => {
 			}
 			await mock.fire("session_compact");
 
-			assert.equal(mock.notifications.length, 0, "No notifications without UI");
-			assert.equal(mock.getSessionName(), undefined, "No name set without UI");
+			assert.equal(
+				mock.notifications.length,
+				0,
+				"No notifications without UI",
+			);
+			assert.equal(
+				mock.getSessionName(),
+				undefined,
+				"No name set without UI",
+			);
 		});
 	});
 
@@ -1731,9 +2143,13 @@ describe("nym", () => {
 
 			const name = mock.getSessionName();
 			assert.ok(name, "Should have a name");
-			assert.match(name!, /^[a-z0-9][a-z0-9-]*[a-z0-9]$/, "Should be clean kebab-case");
-			assert.ok(!name!.includes('"'), "No quotes");
-			assert.ok(!name!.includes("!"), "No special chars");
+			assert.match(
+				name ?? "",
+				/^[a-z0-9][a-z0-9-]*[a-z0-9]$/,
+				"Should be clean kebab-case",
+			);
+			assert.ok(!name?.includes('"'), "No quotes");
+			assert.ok(!name?.includes("!"), "No special chars");
 		});
 
 		it("should handle empty LLM response gracefully", async () => {
@@ -1742,9 +2158,15 @@ describe("nym", () => {
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
 
-			assert.equal(mock.getSessionName(), undefined, "No name from empty response");
+			assert.equal(
+				mock.getSessionName(),
+				undefined,
+				"No name from empty response",
+			);
 			assert.ok(
-				mock.notifications.some((n) => n.message.includes("Session unnamed")),
+				mock.notifications.some((n) =>
+					n.message.includes("Session unnamed"),
+				),
 				"Should fall back to soft notify",
 			);
 		});
@@ -1757,9 +2179,15 @@ describe("nym", () => {
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
 
-			assert.equal(mock.getSessionName(), undefined, "No name on failure");
+			assert.equal(
+				mock.getSessionName(),
+				undefined,
+				"No name on failure",
+			);
 			assert.ok(
-				mock.notifications.some((n) => n.message.includes("Session unnamed")),
+				mock.notifications.some((n) =>
+					n.message.includes("Session unnamed"),
+				),
 				"Should soft-notify on failure",
 			);
 		});
@@ -1771,17 +2199,24 @@ describe("nym", () => {
 			let resolvedModel: any = null;
 
 			// Intercept to check which model gets picked
-			const origGetApiKey = mock.ctx.modelRegistry.getApiKey;
-			mock.ctx.modelRegistry.getApiKey = async (model: any) => {
+			const origGetApiKeyAndHeaders =
+				mock.ctx.modelRegistry.getApiKeyAndHeaders;
+			mock.ctx.modelRegistry.getApiKeyAndHeaders = async (
+				model: any,
+			) => {
 				resolvedModel = model;
-				return origGetApiKey(model);
+				return origGetApiKeyAndHeaders(model);
 			};
 
 			registerTestHandlers(mock.api, { autoNameResult: "test-name" });
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
 
-			assert.equal(resolvedModel?.id, "test-cheap", "Should resolve cheapest model");
+			assert.equal(
+				resolvedModel?.id,
+				"test-cheap",
+				"Should resolve cheapest model",
+			);
 		});
 
 		it("should fall back to soft notify when no models available", async () => {
@@ -1790,12 +2225,17 @@ describe("nym", () => {
 			await mock.fire("session_start");
 			await mock.fire("session_compact");
 
-			assert.equal(mock.getSessionName(), undefined, "No name without models");
+			assert.equal(
+				mock.getSessionName(),
+				undefined,
+				"No name without models",
+			);
 			assert.ok(
-				mock.notifications.some((n) => n.message.includes("Session unnamed")),
+				mock.notifications.some((n) =>
+					n.message.includes("Session unnamed"),
+				),
 				"Should soft-notify when no models",
 			);
 		});
 	});
-
 });
