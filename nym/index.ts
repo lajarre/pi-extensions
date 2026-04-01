@@ -599,7 +599,9 @@ export default function nym(pi: ExtensionAPI) {
 			if (!isBlankNymEditorText(ctx.ui.getEditorText())) return;
 
 			ctx.ui.setEditorText("");
-			void forceAutoName(ctx);
+			void forceAutoName(ctx).catch((error: unknown) => {
+				dbg("forceAutoName terminal hook failed:", error);
+			});
 			return { consume: true };
 		});
 	}
