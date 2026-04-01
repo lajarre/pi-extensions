@@ -30,7 +30,7 @@ function showFeedback(ctx: ExtensionContext, sessionId: string): void {
 	}, FEEDBACK_MS);
 }
 
-function copySessionId(ctx: ExtensionContext): void {
+async function copySessionId(ctx: ExtensionContext): Promise<void> {
 	const sessionId = ctx.sessionManager.getSessionId();
 
 	if (!ctx.hasUI) {
@@ -38,29 +38,23 @@ function copySessionId(ctx: ExtensionContext): void {
 		return;
 	}
 
-	copyToClipboard(sessionId);
 	showFeedback(ctx, sessionId);
+	await copyToClipboard(sessionId);
 }
 
 export default function copySessionIdExtension(pi: ExtensionAPI) {
 	pi.registerCommand("sid", {
 		description: "Copy current session ID to clipboard",
-		handler: async (_args, ctx) => {
-			copySessionId(ctx);
-		},
+		handler: (_args, ctx) => copySessionId(ctx),
 	});
 
 	pi.registerCommand("session-id", {
 		description: "Copy current session ID to clipboard",
-		handler: async (_args, ctx) => {
-			copySessionId(ctx);
-		},
+		handler: (_args, ctx) => copySessionId(ctx),
 	});
 
 	pi.registerShortcut(SHORTCUT, {
 		description: "Copy current session ID to clipboard",
-		handler: async (ctx) => {
-			copySessionId(ctx);
-		},
+		handler: copySessionId,
 	});
 }
