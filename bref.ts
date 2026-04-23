@@ -1,7 +1,10 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import {
 	Container,
 	Markdown,
@@ -33,12 +36,14 @@ declare global {
 	var __piBrefState__: PatchState | undefined;
 }
 
-const state =
-	globalThis.__piBrefState__ ??
-	(globalThis.__piBrefState__ = {
+let state = globalThis.__piBrefState__;
+if (!state) {
+	state = {
 		mode: "regular",
 		patched: false,
-	});
+	};
+	globalThis.__piBrefState__ = state;
+}
 
 const pkgEntry = fileURLToPath(
 	import.meta.resolve("@mariozechner/pi-coding-agent"),
@@ -66,7 +71,9 @@ function nextMode(mode: BrefMode): BrefMode {
 
 function shortenHome(value: string): string {
 	const home = os.homedir();
-	return value.startsWith(home) ? `~${value.slice(home.length)}` : value;
+	return value.startsWith(home)
+		? `~${value.slice(home.length)}`
+		: value;
 }
 
 function shortUrl(value: string): string {
@@ -95,7 +102,10 @@ function textBlocks(content: unknown): string[] {
 			(block): block is { type?: string; text?: string } =>
 				typeof block === "object" && block !== null,
 		)
-		.filter((block) => block.type === "text" && typeof block.text === "string")
+		.filter(
+			(block) =>
+				block.type === "text" && typeof block.text === "string",
+		)
 		.map((block) => block.text ?? "");
 }
 
@@ -114,7 +124,10 @@ function nonEmptyLineCount(text: string): number {
 		.filter(Boolean).length;
 }
 
-function summarizeToolCall(toolName: string, args: Record<string, unknown>): string {
+function summarizeToolCall(
+	toolName: string,
+	args: Record<string, unknown>,
+): string {
 	const pathArg =
 		typeof args.path === "string"
 			? args.path
@@ -123,9 +136,12 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
 				: undefined;
 	const query = typeof args.query === "string" ? args.query : undefined;
 	const url = typeof args.url === "string" ? args.url : undefined;
-	const command = typeof args.command === "string" ? args.command : undefined;
-	const pattern = typeof args.pattern === "string" ? args.pattern : undefined;
-	const action = typeof args.action === "string" ? args.action : undefined;
+	const command =
+		typeof args.command === "string" ? args.command : undefined;
+	const pattern =
+		typeof args.pattern === "string" ? args.pattern : undefined;
+	const action =
+		typeof args.action === "string" ? args.action : undefined;
 	const agent = typeof args.agent === "string" ? args.agent : undefined;
 	const chainName =
 		typeof args.chainName === "string" ? args.chainName : undefined;
@@ -135,7 +151,9 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
 		if (action) {
 			const target = agent ?? chainName;
 			return clip(
-				target ? `${toolName} ${action} ${target}` : `${toolName} ${action}`,
+				target
+					? `${toolName} ${action} ${target}`
+					: `${toolName} ${action}`,
 			);
 		}
 		if (Array.isArray(args.chain)) {
@@ -170,7 +188,7 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
 	if (toolName === "todo") {
 		let text = action ? `${toolName} ${action}` : toolName;
 		if (title) {
-			text += ` \"${title}\"`;
+			text += ` "${title}"`;
 		}
 		return clip(text);
 	}
@@ -188,8 +206,10 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
 
 	if (pathArg) {
 		let text = `${toolName} ${shortenHome(pathArg)}`;
-		const offset = typeof args.offset === "number" ? args.offset : undefined;
-		const limit = typeof args.limit === "number" ? args.limit : undefined;
+		const offset =
+			typeof args.offset === "number" ? args.offset : undefined;
+		const limit =
+			typeof args.limit === "number" ? args.limit : undefined;
 		if (offset !== undefined) {
 			const end = limit !== undefined ? offset + limit - 1 : undefined;
 			text += end !== undefined ? `:${offset}-${end}` : `:${offset}`;
@@ -238,8 +258,10 @@ function summarizeToolResult(
 	if (toolName === "edit") return "edited";
 	if (toolName === "subagent") return "done";
 	if (toolName === "web_search") return "done";
-	if (toolName === "fetch_content") return imageCount > 0 ? `${imageCount} images` : "done";
-	if (toolName === "todo") return firstLine ? clip(firstLine, 60) : "done";
+	if (toolName === "fetch_content")
+		return imageCount > 0 ? `${imageCount} images` : "done";
+	if (toolName === "todo")
+		return firstLine ? clip(firstLine, 60) : "done";
 
 	if (toolName === "bash") {
 		const exitCode =
@@ -255,7 +277,10 @@ function summarizeToolResult(
 		return "ok";
 	}
 
-	if (["read", "grep", "find", "ls"].includes(toolName) && lineCount > 0) {
+	if (
+		["read", "grep", "find", "ls"].includes(toolName) &&
+		lineCount > 0
+	) {
 		return `${lineCount} lines`;
 	}
 
@@ -292,11 +317,17 @@ function renderReplyLine(
 	theme: ThemeModule["theme"],
 	width: number,
 ): string[] {
-	return [truncateToWidth(theme.fg("syntaxComment", "response"), width)];
+	return [
+		truncateToWidth(theme.fg("syntaxComment", "response"), width),
+	];
 }
 
-async function importInternal<T = unknown>(relativePath: string): Promise<T> {
-	const url = pathToFileURL(path.join(pkgRoot, "dist", relativePath)).href;
+async function importInternal<T = unknown>(
+	relativePath: string,
+): Promise<T> {
+	const url = pathToFileURL(
+		path.join(pkgRoot, "dist", relativePath),
+	).href;
 	return (await import(url)) as T;
 }
 
@@ -347,7 +378,9 @@ async function installPatches(): Promise<void> {
 	const { theme } = themeModule;
 
 	const assistantRender = AssistantMessageComponent.prototype.render;
-	AssistantMessageComponent.prototype.render = function (width: number) {
+	AssistantMessageComponent.prototype.render = function (
+		width: number,
+	) {
 		if (getMode() !== "condensed") {
 			return assistantRender.call(this, width);
 		}
@@ -364,7 +397,10 @@ async function installPatches(): Promise<void> {
 		let insertedReplyLine = false;
 
 		for (const content of message.content ?? []) {
-			if (content?.type === "text" && typeof content.text === "string") {
+			if (
+				content?.type === "text" &&
+				typeof content.text === "string"
+			) {
 				const text = content.text.trim();
 				if (text) {
 					if (!insertedReplyLine) {
@@ -383,7 +419,9 @@ async function installPatches(): Promise<void> {
 				typeof content.thinking === "string" &&
 				content.thinking.trim()
 			) {
-				lines.push(...renderBullet(theme, width, theme.italic("thinking")));
+				lines.push(
+					...renderBullet(theme, width, theme.italic("thinking")),
+				);
 			}
 		}
 
@@ -396,7 +434,11 @@ async function installPatches(): Promise<void> {
 						? message.errorMessage
 						: "Operation aborted";
 				lines.push(
-					...renderBullet(theme, width, theme.fg("error", errorMessage)),
+					...renderBullet(
+						theme,
+						width,
+						theme.fg("error", errorMessage),
+					),
 				);
 			} else if (message.stopReason === "error") {
 				const errorMessage =
@@ -425,10 +467,9 @@ async function installPatches(): Promise<void> {
 
 		const label = summarizeToolCall(
 			typeof this.toolName === "string" ? this.toolName : "tool",
-			(typeof this.args === "object" && this.args !== null ? this.args : {}) as Record<
-				string,
-				unknown
-			>,
+			(typeof this.args === "object" && this.args !== null
+				? this.args
+				: {}) as Record<string, unknown>,
 		);
 		const detail = summarizeToolResult(
 			typeof this.toolName === "string" ? this.toolName : "tool",
@@ -449,10 +490,14 @@ async function installPatches(): Promise<void> {
 			detail = "running";
 		} else if (this.status === "cancelled") {
 			detail = "cancelled";
-		} else if (this.status === "error" && typeof this.exitCode === "number") {
+		} else if (
+			this.status === "error" &&
+			typeof this.exitCode === "number"
+		) {
 			detail = `exit ${this.exitCode}`;
 		} else {
-			const output = typeof this.getOutput === "function" ? this.getOutput() : "";
+			const output =
+				typeof this.getOutput === "function" ? this.getOutput() : "";
 			const count = output ? nonEmptyLineCount(output) : 0;
 			detail = count > 0 ? `${count} lines` : "ok";
 		}
@@ -472,6 +517,10 @@ async function installPatches(): Promise<void> {
 		}
 
 		const message = this.message;
+		if (message?.customType === "session-message") {
+			return customRender.call(this, width);
+		}
+
 		const summary = firstTextLine(message?.content);
 		const label = summary
 			? `[${message.customType}] ${summary}`
@@ -480,7 +529,9 @@ async function installPatches(): Promise<void> {
 	};
 
 	const skillRender = SkillInvocationMessageComponent.prototype.render;
-	SkillInvocationMessageComponent.prototype.render = function (width: number) {
+	SkillInvocationMessageComponent.prototype.render = function (
+		width: number,
+	) {
 		if (getMode() !== "condensed") {
 			return skillRender.call(this, width);
 		}
@@ -492,20 +543,31 @@ async function installPatches(): Promise<void> {
 	};
 
 	const branchRender = BranchSummaryMessageComponent.prototype.render;
-	BranchSummaryMessageComponent.prototype.render = function (width: number) {
+	BranchSummaryMessageComponent.prototype.render = function (
+		width: number,
+	) {
 		if (getMode() !== "condensed") {
 			return branchRender.call(this, width);
 		}
 		return renderBullet(theme, width, "branch summary");
 	};
 
-	const compactionRender = CompactionSummaryMessageComponent.prototype.render;
-	CompactionSummaryMessageComponent.prototype.render = function (width: number) {
+	const compactionRender =
+		CompactionSummaryMessageComponent.prototype.render;
+	CompactionSummaryMessageComponent.prototype.render = function (
+		width: number,
+	) {
 		if (getMode() !== "condensed") {
 			return compactionRender.call(this, width);
 		}
-		const tokenStr = Number(this.message?.tokensBefore ?? 0).toLocaleString();
-		return renderBullet(theme, width, `compacted from ${tokenStr} tokens`);
+		const tokenStr = Number(
+			this.message?.tokensBefore ?? 0,
+		).toLocaleString();
+		return renderBullet(
+			theme,
+			width,
+			`compacted from ${tokenStr} tokens`,
+		);
 	};
 
 	state.patched = true;
@@ -528,8 +590,9 @@ function cycleMode(ctx: ExtensionContext): void {
 }
 
 function normalizeCommandArg(arg: string): string {
-	return singleLine(arg.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "))
-		.toLowerCase();
+	return singleLine(
+		arg.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "),
+	).toLowerCase();
 }
 
 function setModeFromCommand(arg: string): BrefMode | undefined {

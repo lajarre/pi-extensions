@@ -10,7 +10,13 @@ const USER_TIMESTAMP_PROPERTY = "__piFeedTimestamp__";
 type ThemeModule = {
 	theme: {
 		fg(color: string, text: string): string;
+		bg(color: string, text: string): string;
 	};
+};
+
+type TimestampRenderOptions = {
+	fgColor?: string;
+	bgColor?: string;
 };
 
 type UserMessageComponentLike = {
@@ -96,12 +102,15 @@ function renderRightAlignedTimestamp(
 	width: number,
 	timestamp: string,
 	theme?: ThemeModule["theme"],
+	options: TimestampRenderOptions = {},
 ): string {
+	const { fgColor = "dim", bgColor } = options;
 	const text =
 		timestamp.length > width ? timestamp.slice(-width) : timestamp;
-	const rendered = theme ? theme.fg("dim", text) : text;
+	const rendered = theme ? theme.fg(fgColor, text) : text;
 	const spacing = Math.max(0, width - stripAnsi(rendered).length);
-	return `${" ".repeat(spacing)}${rendered}`;
+	const line = `${" ".repeat(spacing)}${rendered}`;
+	return theme && bgColor ? theme.bg(bgColor, line) : line;
 }
 
 function replaceTopPaddingLine(
@@ -109,13 +118,14 @@ function replaceTopPaddingLine(
 	width: number,
 	timestamp: string,
 	theme?: ThemeModule["theme"],
+	options?: TimestampRenderOptions,
 ): string[] {
 	if (lines.length === 0) return lines;
 
 	const prefix = lines[0]?.startsWith(OSC133_ZONE_START)
 		? OSC133_ZONE_START
 		: "";
-	lines[0] = `${prefix}${renderRightAlignedTimestamp(width, timestamp, theme)}`;
+	lines[0] = `${prefix}${renderRightAlignedTimestamp(width, timestamp, theme, options)}`;
 	return lines;
 }
 
@@ -177,7 +187,9 @@ async function installPatches(): Promise<void> {
 		const lines = userRender.call(this, width);
 		const timestamp = getUserTimestamp(this);
 		return timestamp
-			? replaceTopPaddingLine(lines, width, timestamp, theme)
+			? replaceTopPaddingLine(lines, width, timestamp, theme, {
+					bgColor: "userMessageBg",
+				})
 			: lines;
 	};
 
