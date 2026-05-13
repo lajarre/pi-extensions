@@ -10,8 +10,8 @@
 	"scripts": {
 		"lint": "biome lint .",
 		"format": "biome format --write .",
-		"check": "biome check . && tsc -p github-write-approval/tsconfig.json --noEmit",
-		"test": "node --test --test-concurrency=1 test/*.test.ts */test/*.test.ts",
+		"check": "biome check package.json package-lock.json github-write-approval && tsc -p github-write-approval/tsconfig.json --noEmit",
+		"test": "node --test --test-concurrency=1 github-write-approval/test/*.test.ts",
 		"test:fixtures": "node --test --test-concurrency=1 github-write-approval/test/command-policy.fixtures.ts"
 	},
 	"repository": {
