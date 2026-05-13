@@ -10,8 +10,9 @@
 	"scripts": {
 		"lint": "biome lint .",
 		"format": "biome format --write .",
-		"check": "biome check .",
-		"test": "echo \"No tests configured\""
+		"check": "biome check . && tsc -p github-write-approval/tsconfig.json --noEmit",
+		"test": "node --test --test-concurrency=1 test/*.test.ts */test/*.test.ts",
+		"test:fixtures": "node --test --test-concurrency=1 github-write-approval/test/command-policy.fixtures.ts"
 	},
 	"repository": {
 		"type": "git",
@@ -30,6 +31,8 @@
 		"just-bash": "^2.11.15"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.8"
+		"@biomejs/biome": "^2.4.8",
+		"@types/node": "^24.10.0",
+		"typescript": "^5.9.3"
 	}
 }
