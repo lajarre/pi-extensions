@@ -11,6 +11,7 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 | `bref.ts` | Toggle condensed display via `/bref` |
 | `feed-timestamps.ts` | Add right-aligned `yyyy-mm-dd hh:mm:ss` feed timestamps via upstream-compatible monkey patches |
 | `compaction-model.ts` | Use a cheaper model for context compaction |
+| `codex-fast.ts` | Toggle OpenAI Codex Fast mode via `/fast` |
 | `fork-rename.ts` | Auto-rename forked sessions |
 | `post-compact-reminder.ts` | Remind after compaction events |
 | `protect-paths.ts` | Guard `.git` paths, block dangerous delete flows, and add macOS `move_to_trash` |
@@ -19,3 +20,21 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 | `copy-session-id.ts` | Copy current session ID via `/sid` or `F8` |
 | `spawn-worker.ts` | Tmux worker spawn + session-control orchestration |
 | `todos.ts` | Todo management extension |
+
+## Codex Fast
+
+`codex-fast.ts` adds `/fast` for ChatGPT-authenticated OpenAI Codex models that support Fast mode (`gpt-5.5` and `gpt-5.4`). When enabled, eligible provider requests include `service_tier: "priority"`.
+
+```text
+/fast
+/fast on
+/fast off
+/fast auto
+/fast status
+```
+
+Auto mode is off by default. Enable it per process with `PI_CODEX_FAST=1`, globally with `~/.pi/agent/extensions/openai-fast.json`, or per project with `.pi/openai-fast.json`:
+
+```json
+{ "enabled": true }
+```
