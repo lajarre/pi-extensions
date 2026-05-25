@@ -40,6 +40,25 @@ type FastConfig = {
 	enabled?: unknown;
 };
 
+export class CodexFastConfigError extends Error {
+	readonly code:
+		| "PI_CODEX_FAST_ENV_INVALID"
+		| "PI_CODEX_FAST_CONFIG_UNREADABLE"
+		| "PI_CODEX_FAST_CONFIG_INVALID";
+
+	constructor(
+		code:
+			| "PI_CODEX_FAST_ENV_INVALID"
+			| "PI_CODEX_FAST_CONFIG_UNREADABLE"
+			| "PI_CODEX_FAST_CONFIG_INVALID",
+		message: string,
+	) {
+		super(message);
+		this.code = code;
+		this.name = "CodexFastConfigError";
+	}
+}
+
 export function parseFastBoolean(
 	value: string | undefined,
 ): boolean | undefined {
@@ -64,16 +83,54 @@ export function parseFastBoolean(
 function readJsonConfig(path: string): FastConfig {
 	if (!existsSync(path)) return {};
 
+	let raw: string;
 	try {
-		const parsed = JSON.parse(readFileSync(path, "utf8"));
-		return parsed &&
-			typeof parsed === "object" &&
-			!Array.isArray(parsed)
-			? (parsed as FastConfig)
-			: {};
-	} catch {
-		return {};
+		raw = readFileSync(path, "utf8");
+	} catch (error) {
+		throw new CodexFastConfigError(
+			"PI_CODEX_FAST_CONFIG_UNREADABLE",
+			`Cannot read Codex Fast config at ${path}: ${formatError(error)}`,
+		);
 	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		throw new CodexFastConfigError(
+			"PI_CODEX_FAST_CONFIG_INVALID",
+			`Invalid Codex Fast config JSON at ${path}: ${formatError(error)}`,
+		);
+	}
+
+	if (!isPlainObject(parsed)) {
+		throw new CodexFastConfigError(
+			"PI_CODEX_FAST_CONFIG_INVALID",
+			`Codex Fast config at ${path} must be a JSON object`,
+		);
+	}
+
+	if (
+		Object.hasOwn(parsed, "enabled") &&
+		typeof parsed.enabled !== "boolean"
+	) {
+		throw new CodexFastConfigError(
+			"PI_CODEX_FAST_CONFIG_INVALID",
+			`Codex Fast config at ${path} must set enabled to a boolean`,
+		);
+	}
+
+	return parsed;
+}
+
+function isPlainObject(value: unknown): value is FastConfig {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error && error.message
+		? error.message
+		: String(error);
 }
 
 function getAgentDir(): string {
@@ -102,7 +159,7 @@ function booleanConfigValue(config: FastConfig): boolean | undefined {
 }
 
 export function loadAutoFastEnabled(cwd: string): boolean {
-	const envEnabled = parseFastBoolean(process.env.PI_CODEX_FAST);
+	const envEnabled = readEnvFastEnabled();
 	if (envEnabled !== undefined) return envEnabled;
 
 	const projectConfigPath = findProjectFastConfig(cwd);
@@ -117,6 +174,19 @@ export function loadAutoFastEnabled(cwd: string): boolean {
 		join(getAgentDir(), "extensions", "openai-fast.json"),
 	);
 	return booleanConfigValue(globalConfig) ?? false;
+}
+
+function readEnvFastEnabled(): boolean | undefined {
+	const value = process.env.PI_CODEX_FAST;
+	if (value === undefined) return undefined;
+
+	const parsed = parseFastBoolean(value);
+	if (parsed !== undefined) return parsed;
+
+	throw new CodexFastConfigError(
+		"PI_CODEX_FAST_ENV_INVALID",
+		`PI_CODEX_FAST must be one of 1,true,yes,on,0,false,no,off; got ${JSON.stringify(value)}`,
+	);
 }
 
 function isOpenAICodexProvider(provider: unknown): boolean {
@@ -142,16 +212,12 @@ export function getFastEligibility(ctx: FastContext): FastEligibility {
 		};
 	}
 
-	try {
-		const modelRegistry = ctx.modelRegistry;
-		if (typeof modelRegistry?.isUsingOAuth !== "function") {
-			return { ok: false, reason: "auth mode cannot be verified" };
-		}
-		if (!modelRegistry.isUsingOAuth(model)) {
-			return { ok: false, reason: "auth is not ChatGPT OAuth" };
-		}
-	} catch {
+	const modelRegistry = ctx.modelRegistry;
+	if (typeof modelRegistry?.isUsingOAuth !== "function") {
 		return { ok: false, reason: "auth mode cannot be verified" };
+	}
+	if (!modelRegistry.isUsingOAuth(model)) {
+		return { ok: false, reason: "auth is not ChatGPT OAuth" };
 	}
 
 	return { ok: true };
@@ -202,12 +268,13 @@ export function applyFastServiceTier(
 
 function updateFastStatus(ctx: FastContext, enabled: boolean): void {
 	if (!ctx.ui?.setStatus) return;
+	if (!enabled) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		return;
+	}
 
 	const eligibility = getFastEligibility(ctx);
-	ctx.ui.setStatus(
-		STATUS_KEY,
-		enabled && eligibility.ok ? "fast" : undefined,
-	);
+	ctx.ui.setStatus(STATUS_KEY, eligibility.ok ? "fast" : undefined);
 }
 
 function notify(
@@ -216,6 +283,15 @@ function notify(
 	level: "info" | "warning" | "error",
 ) {
 	ctx.ui?.notify?.(message, level);
+}
+
+function fastStatusSuffix(ctx: FastContext, enabled: boolean): string {
+	if (!enabled) return "inactive";
+
+	const eligibility = getFastEligibility(ctx);
+	return eligibility.ok
+		? "eligible"
+		: `ineligible: ${eligibility.reason}`;
 }
 
 export default function codexFastExtension(pi: ExtensionAPI): void {
@@ -239,9 +315,9 @@ export default function codexFastExtension(pi: ExtensionAPI): void {
 			const command = String(args || "")
 				.trim()
 				.toLowerCase();
-			const eligibility = getFastEligibility(ctx);
 
 			if (command === "status") {
+				const eligibility = getFastEligibility(ctx);
 				const suffix = eligibility.ok
 					? "eligible"
 					: `ineligible: ${eligibility.reason}`;
@@ -262,15 +338,17 @@ export default function codexFastExtension(pi: ExtensionAPI): void {
 			} else if (command === "on" || command === "") {
 				if (command === "" && isFastEnabled()) {
 					override = "off";
-				} else if (!eligibility.ok) {
-					notify(
-						ctx,
-						`Fast mode is not available for the current session (${eligibility.reason}).`,
-						"error",
-					);
-					updateFastStatus(ctx, isFastEnabled());
-					return;
 				} else {
+					const eligibility = getFastEligibility(ctx);
+					if (!eligibility.ok) {
+						notify(
+							ctx,
+							`Fast mode is not available for the current session (${eligibility.reason}).`,
+							"error",
+						);
+						updateFastStatus(ctx, isFastEnabled());
+						return;
+					}
 					override = "on";
 				}
 			} else {
@@ -278,14 +356,12 @@ export default function codexFastExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			updateFastStatus(ctx, isFastEnabled());
-			const latestEligibility = getFastEligibility(ctx);
-			const suffix = latestEligibility.ok
-				? "eligible"
-				: `ineligible: ${latestEligibility.reason}`;
+			const enabled = isFastEnabled();
+			updateFastStatus(ctx, enabled);
+			const suffix = fastStatusSuffix(ctx, enabled);
 			notify(
 				ctx,
-				`fast mode ${isFastEnabled() ? "enabled" : "disabled"} (${modeLabel()}, ${suffix})`,
+				`fast mode ${enabled ? "enabled" : "disabled"} (${modeLabel()}, ${suffix})`,
 				"info",
 			);
 		},

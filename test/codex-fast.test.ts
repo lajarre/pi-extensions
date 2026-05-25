@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import codexFastExtension, {
 	applyFastServiceTier,
+	CodexFastConfigError,
 	getFastEligibility,
 	loadAutoFastEnabled,
 	parseFastBoolean,
@@ -79,7 +80,12 @@ afterEach(() => {
 });
 
 function createHarness(
-	options: { cwd?: string; model?: TestModel; oauth?: boolean } = {},
+	options: {
+		cwd?: string;
+		model?: TestModel;
+		oauth?: boolean;
+		isUsingOAuth?: (model: Record<string, unknown>) => boolean;
+	} = {},
 ) {
 	const handlers = new Map<string, EventHandler[]>();
 	const commands = new Map<string, { handler: CommandHandler }>();
@@ -90,9 +96,11 @@ function createHarness(
 		model: options.model ?? eligibleModel,
 		modelRegistry: {
 			oauth: options.oauth ?? true,
-			isUsingOAuth() {
-				return this.oauth;
-			},
+			isUsingOAuth:
+				options.isUsingOAuth ??
+				function () {
+					return this.oauth;
+				},
 		},
 		ui: {
 			notify(message: string, level: string) {
@@ -187,6 +195,35 @@ describe("loadAutoFastEnabled", () => {
 		setEnv("PI_CODING_AGENT_DIR", agentDir);
 		assert.equal(loadAutoFastEnabled(project), true);
 	});
+
+	it("fails loudly for invalid PI_CODEX_FAST values", () => {
+		setEnv("PI_CODEX_FAST", "flase");
+
+		assert.throws(
+			() => loadAutoFastEnabled(process.cwd()),
+			(error) =>
+				error instanceof CodexFastConfigError &&
+				error.code === "PI_CODEX_FAST_ENV_INVALID",
+		);
+	});
+
+	it("fails loudly for invalid project config files", () => {
+		setEnv("PI_CODEX_FAST", undefined);
+		const root = mkdtempSync(path.join(tmpdir(), "pi-fast-"));
+		const project = path.join(root, "project");
+		mkdirSync(path.join(project, ".pi"), { recursive: true });
+		writeFileSync(
+			path.join(project, ".pi", "openai-fast.json"),
+			JSON.stringify({ enabled: "yes" }),
+		);
+
+		assert.throws(
+			() => loadAutoFastEnabled(project),
+			(error) =>
+				error instanceof CodexFastConfigError &&
+				error.code === "PI_CODEX_FAST_CONFIG_INVALID",
+		);
+	});
 });
 
 describe("fast eligibility", () => {
@@ -278,6 +315,21 @@ describe("fast eligibility", () => {
 		assert.deepEqual(
 			getFastEligibility({ model: eligibleModel, modelRegistry }),
 			{ ok: true },
+		);
+	});
+
+	it("surfaces unexpected OAuth check failures", () => {
+		assert.throws(
+			() =>
+				getFastEligibility({
+					model: eligibleModel,
+					modelRegistry: {
+						isUsingOAuth() {
+							throw new Error("registry failure");
+						},
+					},
+				}),
+			/registry failure/,
 		);
 	});
 });
@@ -435,5 +487,24 @@ describe("/fast command", () => {
 			harness.notifications.at(-1)?.message ?? "",
 			/model does not support/,
 		);
+	});
+
+	it("allows disabling without checking OAuth", async () => {
+		for (const args of ["off", ""]) {
+			setEnv("PI_CODEX_FAST", "on");
+			const harness = createHarness({
+				isUsingOAuth() {
+					throw new Error("registry failure");
+				},
+			});
+
+			await harness.command("fast", args);
+
+			assert.equal(harness.statuses.get("fast"), undefined);
+			assert.match(
+				harness.notifications.at(-1)?.message ?? "",
+				/fast mode disabled/,
+			);
+		}
 	});
 });
