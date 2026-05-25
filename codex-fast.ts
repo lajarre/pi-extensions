@@ -143,11 +143,11 @@ export function getFastEligibility(ctx: FastContext): FastEligibility {
 	}
 
 	try {
-		const isUsingOAuth = ctx.modelRegistry?.isUsingOAuth;
-		if (typeof isUsingOAuth !== "function") {
+		const modelRegistry = ctx.modelRegistry;
+		if (typeof modelRegistry?.isUsingOAuth !== "function") {
 			return { ok: false, reason: "auth mode cannot be verified" };
 		}
-		if (!isUsingOAuth(model)) {
+		if (!modelRegistry.isUsingOAuth(model)) {
 			return { ok: false, reason: "auth is not ChatGPT OAuth" };
 		}
 	} catch {
@@ -163,6 +163,23 @@ function isPayloadObject(payload: unknown): payload is RequestPayload {
 	);
 }
 
+function isCodexResponsesRequestPayload(
+	payload: RequestPayload,
+	modelId: string | undefined,
+): boolean {
+	return (
+		payload.model === modelId &&
+		payload.store === false &&
+		payload.stream === true &&
+		typeof payload.instructions === "string" &&
+		Array.isArray(payload.input) &&
+		Array.isArray(payload.include) &&
+		payload.include.includes("reasoning.encrypted_content") &&
+		payload.tool_choice === "auto" &&
+		payload.parallel_tool_calls === true
+	);
+}
+
 export function applyFastServiceTier(
 	payload: unknown,
 	ctx: FastContext,
@@ -171,7 +188,9 @@ export function applyFastServiceTier(
 	if (!eligibility.ok) return undefined;
 	if (!isPayloadObject(payload)) return undefined;
 	if ("service_tier" in payload) return undefined;
-	if (payload.model !== ctx.model?.id) return undefined;
+	if (!isCodexResponsesRequestPayload(payload, ctx.model?.id)) {
+		return undefined;
+	}
 
 	return { ...payload, service_tier: FAST_SERVICE_TIER };
 }

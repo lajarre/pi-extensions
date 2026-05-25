@@ -20,6 +20,7 @@ type TestContext = {
 	cwd: string;
 	model: TestModel;
 	modelRegistry: {
+		oauth: boolean;
 		isUsingOAuth: (model: Record<string, unknown>) => boolean;
 	};
 	ui: {
@@ -43,6 +44,23 @@ const eligibleModel: TestModel = {
 	id: "gpt-5.5",
 	provider: "openai-codex",
 };
+
+function createCodexPayload(
+	overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+	return {
+		model: eligibleModel.id,
+		store: false,
+		stream: true,
+		instructions: "You are a helpful assistant.",
+		input: [],
+		text: { verbosity: "low" },
+		include: ["reasoning.encrypted_content"],
+		tool_choice: "auto",
+		parallel_tool_calls: true,
+		...overrides,
+	};
+}
 
 const originalEnv = new Map<string, string | undefined>();
 
@@ -71,7 +89,10 @@ function createHarness(
 		cwd: options.cwd ?? process.cwd(),
 		model: options.model ?? eligibleModel,
 		modelRegistry: {
-			isUsingOAuth: () => options.oauth ?? true,
+			oauth: options.oauth ?? true,
+			isUsingOAuth() {
+				return this.oauth;
+			},
 		},
 		ui: {
 			notify(message: string, level: string) {
@@ -173,7 +194,12 @@ describe("fast eligibility", () => {
 		assert.deepEqual(
 			getFastEligibility({
 				model: eligibleModel,
-				modelRegistry: { isUsingOAuth: () => true },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			}),
 			{ ok: true },
 		);
@@ -181,64 +207,118 @@ describe("fast eligibility", () => {
 		assert.equal(
 			getFastEligibility({
 				model: { ...eligibleModel, id: "gpt-5.4" },
-				modelRegistry: { isUsingOAuth: () => true },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			}).ok,
 			true,
 		);
 		assert.equal(
 			getFastEligibility({
 				model: { ...eligibleModel, id: "gpt-5.4-mini" },
-				modelRegistry: { isUsingOAuth: () => true },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			}).ok,
 			false,
 		);
 		assert.equal(
 			getFastEligibility({
 				model: { ...eligibleModel, provider: "openai-codex-second" },
-				modelRegistry: { isUsingOAuth: () => true },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			}).ok,
 			false,
 		);
 		assert.equal(
 			getFastEligibility({
 				model: { ...eligibleModel, api: "openai-responses" },
-				modelRegistry: { isUsingOAuth: () => true },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			}).ok,
 			false,
 		);
 		assert.equal(
 			getFastEligibility({
 				model: eligibleModel,
-				modelRegistry: { isUsingOAuth: () => false },
+				modelRegistry: {
+					oauth: false,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			}).ok,
 			false,
+		);
+	});
+
+	it("preserves the model registry binding when checking OAuth", () => {
+		const modelRegistry = {
+			oauth: true,
+			isUsingOAuth(model: Record<string, unknown>) {
+				assert.equal(this, modelRegistry);
+				return this.oauth && model.provider === "openai-codex";
+			},
+		};
+
+		assert.deepEqual(
+			getFastEligibility({ model: eligibleModel, modelRegistry }),
+			{ ok: true },
 		);
 	});
 });
 
 describe("applyFastServiceTier", () => {
 	it("adds priority for eligible Codex payloads", () => {
-		const result = applyFastServiceTier(
-			{ model: "gpt-5.5", stream: true },
-			{
-				model: eligibleModel,
-				modelRegistry: { isUsingOAuth: () => true },
+		const result = applyFastServiceTier(createCodexPayload(), {
+			model: eligibleModel,
+			modelRegistry: {
+				oauth: true,
+				isUsingOAuth() {
+					return this.oauth;
+				},
 			},
-		);
+		});
 
 		assert.deepEqual(result, {
+			store: false,
 			model: "gpt-5.5",
 			stream: true,
+			instructions: "You are a helpful assistant.",
+			input: [],
+			text: { verbosity: "low" },
+			include: ["reasoning.encrypted_content"],
+			tool_choice: "auto",
+			parallel_tool_calls: true,
 			service_tier: "priority",
 		});
 	});
 
 	it("does not overwrite an existing service_tier", () => {
 		const result = applyFastServiceTier(
-			{ model: "gpt-5.5", service_tier: "flex" },
+			createCodexPayload({ service_tier: "flex" }),
 			{
 				model: eligibleModel,
-				modelRegistry: { isUsingOAuth: () => true },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			},
 		);
 
@@ -247,10 +327,15 @@ describe("applyFastServiceTier", () => {
 
 	it("skips payloads that do not match the active model", () => {
 		const result = applyFastServiceTier(
-			{ model: "gpt-5.4" },
+			createCodexPayload({ model: "gpt-5.4" }),
 			{
 				model: eligibleModel,
-				modelRegistry: { isUsingOAuth: () => true },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			},
 		);
 
@@ -258,11 +343,30 @@ describe("applyFastServiceTier", () => {
 	});
 
 	it("skips non-OAuth Codex payloads", () => {
+		const result = applyFastServiceTier(createCodexPayload(), {
+			model: eligibleModel,
+			modelRegistry: {
+				oauth: false,
+				isUsingOAuth() {
+					return this.oauth;
+				},
+			},
+		});
+
+		assert.equal(result, undefined);
+	});
+
+	it("skips same-id payloads without the Codex Responses request shape", () => {
 		const result = applyFastServiceTier(
-			{ model: "gpt-5.5" },
+			{ model: "gpt-5.5", stream: true },
 			{
 				model: eligibleModel,
-				modelRegistry: { isUsingOAuth: () => false },
+				modelRegistry: {
+					oauth: true,
+					isUsingOAuth() {
+						return this.oauth;
+					},
+				},
 			},
 		);
 
@@ -283,9 +387,17 @@ describe("/fast command", () => {
 
 		await harness.command("fast", "on");
 		assert.deepEqual(
-			await harness.callProviderRequest({ model: "gpt-5.5" }),
+			await harness.callProviderRequest(createCodexPayload()),
 			{
+				store: false,
 				model: "gpt-5.5",
+				stream: true,
+				instructions: "You are a helpful assistant.",
+				input: [],
+				text: { verbosity: "low" },
+				include: ["reasoning.encrypted_content"],
+				tool_choice: "auto",
+				parallel_tool_calls: true,
 				service_tier: "priority",
 			},
 		);
