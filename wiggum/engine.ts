@@ -1,12 +1,12 @@
-import { appendFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { runSync } from "../../pi-subagents/execution.js";
+import { appendFileSync, writeFileSync } from "node:fs";
 import type {
 	AgentConfig,
 	AgentSource,
 } from "../../pi-subagents/agents.js";
+import { runSync } from "../../pi-subagents/execution.js";
 import type { SingleResult } from "../../pi-subagents/types.js";
-import { evaluateGate, shouldStop, type GateConfig } from "./gate.js";
+import { evaluateGate, type GateConfig, shouldStop } from "./gate.js";
 import type { ExecFn, WiggumSettings } from "./settings.js";
 import { DEFAULT_WIGGUM_REVIEW_PROMPT } from "./settings.js";
 
@@ -42,6 +42,8 @@ export interface LoopOptions {
 	exec: ExecFn;
 	logFile?: string;
 	signal?: AbortSignal;
+	/** Model override passed to runSync (provider/id format) */
+	modelOverride?: string;
 	/** Dynamic max — checked each iteration so /wiggum max N works mid-loop */
 	getMaxIterations?: () => number;
 	onIterationStart?: (iteration: number, max: number) => void;
@@ -52,11 +54,13 @@ export interface LoopOptions {
 	) => void;
 	onProgress?: (state: WiggumWidgetState) => void;
 }
-
-function writeLogLine(logFile: string | undefined, data: Record<string, unknown>): void {
+function writeLogLine(
+	logFile: string | undefined,
+	data: Record<string, unknown>,
+): void {
 	if (!logFile) return;
 	try {
-		appendFileSync(logFile, JSON.stringify(data) + "\n");
+		appendFileSync(logFile, `${JSON.stringify(data)}\n`);
 	} catch {}
 }
 
@@ -118,7 +122,9 @@ export async function runWiggumLoop(
 	let completedIterations = 0;
 
 	if (options.logFile) {
-		try { writeFileSync(options.logFile, ""); } catch {}
+		try {
+			writeFileSync(options.logFile, "");
+		} catch {}
 	}
 
 	for (let i = 1; ; i++) {
@@ -180,23 +186,24 @@ export async function runWiggumLoop(
 				{
 					runId,
 					signal,
+					modelOverride: options.modelOverride,
 					onUpdate: options.onProgress
 						? (r) => {
-							const p = r.details?.progress?.[0];
-							if (!p) return;
-							lastTokens = p.tokens || 0;
-							lastDurationMs = p.durationMs || 0;
-							options.onProgress!({
-								iteration: i,
-								maxIterations: max,
-								phase: "agent",
-								agentName: flow.agentConfig.name,
-								currentTool: p.currentTool,
-								recentOutput: p.recentOutput || [],
-								tokens: lastTokens,
-								durationMs: lastDurationMs,
-							});
-						}
+								const p = r.details?.progress?.[0];
+								if (!p) return;
+								lastTokens = p.tokens || 0;
+								lastDurationMs = p.durationMs || 0;
+								options.onProgress?.({
+									iteration: i,
+									maxIterations: max,
+									phase: "agent",
+									agentName: flow.agentConfig.name,
+									currentTool: p.currentTool,
+									recentOutput: p.recentOutput || [],
+									tokens: lastTokens,
+									durationMs: lastDurationMs,
+								});
+							}
 						: undefined,
 				},
 			);

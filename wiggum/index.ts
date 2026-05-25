@@ -10,28 +10,32 @@ import type {
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import {
 	Container,
+	type SelectItem,
 	SelectList,
 	Text,
 	truncateToWidth,
 	visibleWidth,
-	type SelectItem,
 } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
-	loadSettings,
-	resolveExitScript,
-	REVIEW_GUIDELINES_TEMPLATE,
-	type ExecFn,
-	type WiggumSettings,
-} from "./settings.js";
+	assembleQualityContext,
+	loadProjectGuidelines,
+	type ReviewScope,
+} from "./context.js";
 import {
 	buildInlineAgent,
-	runWiggumLoop,
 	type LoopResult,
+	runWiggumLoop,
 	type WiggumWidgetState,
 } from "./engine.js";
-import { assembleQualityContext, loadProjectGuidelines, type ReviewScope } from "./context.js";
 import type { GateConfig } from "./gate.js";
+import {
+	type ExecFn,
+	loadSettings,
+	REVIEW_GUIDELINES_TEMPLATE,
+	resolveExitScript,
+	type WiggumSettings,
+} from "./settings.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,11 +104,15 @@ async function resolveGuidelinesPath(
 	cwd: string,
 	exec: ExecFn,
 ): Promise<string> {
-	const result = await exec(
-		"git", ["rev-parse", "--show-toplevel"], { cwd },
-	);
+	const result = await exec("git", ["rev-parse", "--show-toplevel"], {
+		cwd,
+	});
 	if (result.code === 0 && result.stdout.trim()) {
-		return path.join(result.stdout.trim(), "doc", "review-guidelines.md");
+		return path.join(
+			result.stdout.trim(),
+			"doc",
+			"review-guidelines.md",
+		);
 	}
 	return path.join(cwd, "doc", "review-guidelines.md");
 }
@@ -150,26 +158,29 @@ function renderWiggumWidget(
 	if (state.phase === "agent") {
 		const elapsed = formatDuration(state.durationMs);
 		const tok = `${formatTokens(state.tokens)} tok`;
-		lines.push(truncLine(
-			theme.fg("accent", `wiggum quality ${iter}`)
-			+ ` | ${theme.fg("warning", "running")}`
-			+ ` | ${elapsed} | ${tok}`,
-			MAX_LINE_WIDTH,
-		));
+		lines.push(
+			truncLine(
+				theme.fg("accent", `wiggum quality ${iter}`) +
+					` | ${theme.fg("warning", "running")}` +
+					` | ${elapsed} | ${tok}`,
+				MAX_LINE_WIDTH,
+			),
+		);
 		const recent = state.recentOutput.slice(-3);
 		for (const line of recent) {
-			lines.push(truncLine(
-				theme.fg("dim", `  > ${line}`),
-				MAX_LINE_WIDTH,
-			));
+			lines.push(
+				truncLine(theme.fg("dim", `  > ${line}`), MAX_LINE_WIDTH),
+			);
 		}
 	} else {
 		// testing or gate
-		lines.push(truncLine(
-			theme.fg("accent", `wiggum quality ${iter}`)
-			+ ` | ${state.phase}`,
-			MAX_LINE_WIDTH,
-		));
+		lines.push(
+			truncLine(
+				theme.fg("accent", `wiggum quality ${iter}`) +
+					` | ${state.phase}`,
+				MAX_LINE_WIDTH,
+			),
+		);
 	}
 
 	ctx.ui.setWidget(WIGGUM_WIDGET_KEY, lines);
@@ -192,38 +203,69 @@ function updateStatus(ctx: ExtensionContext) {
 // ── Scope picker ─────────────────────────────────────────────
 
 const SCOPE_ITEMS: SelectItem[] = [
-	{ value: "uncommitted", label: "Uncommitted changes", description: "" },
+	{
+		value: "uncommitted",
+		label: "Uncommitted changes",
+		description: "",
+	},
 	{ value: "last-commit", label: "Last commit", description: "" },
 	{ value: "branch", label: "Branch vs main", description: "" },
 ];
 
-async function pickScope(ctx: ExtensionContext): Promise<ReviewScope | null> {
+async function pickScope(
+	ctx: ExtensionContext,
+): Promise<ReviewScope | null> {
 	if (!ctx.hasUI) return "uncommitted";
 
-	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const container = new Container();
-		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
-		container.addChild(new Text(theme.fg("accent", theme.bold("Select review scope"))));
+	return ctx.ui.custom<string | null>(
+		(tui, theme, _kb, done) => {
+			const container = new Container();
+			container.addChild(
+				new DynamicBorder((str: string) => theme.fg("accent", str)),
+			);
+			container.addChild(
+				new Text(theme.fg("accent", theme.bold("Select review scope"))),
+			);
 
-		const selectList = new SelectList(SCOPE_ITEMS, SCOPE_ITEMS.length, {
-			selectedPrefix: (text: string) => theme.fg("accent", text),
-			selectedText: (text: string) => theme.fg("accent", text),
-			description: (text: string) => theme.fg("muted", text),
-		});
+			const selectList = new SelectList(
+				SCOPE_ITEMS,
+				SCOPE_ITEMS.length,
+				{
+					selectedPrefix: (text: string) => theme.fg("accent", text),
+					selectedText: (text: string) => theme.fg("accent", text),
+					description: (text: string) => theme.fg("muted", text),
+				},
+			);
 
-		selectList.onSelect = (item) => done(item.value as string);
-		selectList.onCancel = () => done(null);
+			selectList.onSelect = (item) => done(item.value as string);
+			selectList.onCancel = () => done(null);
 
-		container.addChild(selectList);
-		container.addChild(new Text(theme.fg("dim", "Enter to confirm, Esc to cancel")));
-		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
+			container.addChild(selectList);
+			container.addChild(
+				new Text(theme.fg("dim", "Enter to confirm, Esc to cancel")),
+			);
+			container.addChild(
+				new DynamicBorder((str: string) => theme.fg("accent", str)),
+			);
 
-		return {
-			render(width: number) { return container.render(width); },
-			invalidate() { container.invalidate(); },
-			handleInput(data: string) { selectList.handleInput(data); tui.requestRender(); },
-		};
-	}, { overlay: true, overlayOptions: { anchor: "center", width: 50, maxHeight: "50%" } }) as Promise<ReviewScope | null>;
+			return {
+				render(width: number) {
+					return container.render(width);
+				},
+				invalidate() {
+					container.invalidate();
+				},
+				handleInput(data: string) {
+					selectList.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		},
+		{
+			overlay: true,
+			overlayOptions: { anchor: "center", width: 50, maxHeight: "50%" },
+		},
+	) as Promise<ReviewScope | null>;
 }
 
 // ── Guidelines gate picker ───────────────────────────────────
@@ -240,36 +282,74 @@ async function pickGuidelinesAction(
 	if (!ctx.hasUI) return null;
 
 	const items: SelectItem[] = [
-		{ value: "create", label: `Create at ${proposedPath}`, description: "" },
-		{ value: "specify", label: "Specify a different path", description: "" },
+		{
+			value: "create",
+			label: `Create at ${proposedPath}`,
+			description: "",
+		},
+		{
+			value: "specify",
+			label: "Specify a different path",
+			description: "",
+		},
 		{ value: "cancel", label: "Cancel", description: "" },
 	];
 
-	const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const container = new Container();
-		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
-		container.addChild(new Text(theme.fg("warning", theme.bold("No review guidelines found"))));
-		container.addChild(new Text(theme.fg("dim", "Wiggum requires a guidelines file to review against.")));
+	const result = await ctx.ui.custom<string | null>(
+		(tui, theme, _kb, done) => {
+			const container = new Container();
+			container.addChild(
+				new DynamicBorder((str: string) => theme.fg("accent", str)),
+			);
+			container.addChild(
+				new Text(
+					theme.fg("warning", theme.bold("No review guidelines found")),
+				),
+			);
+			container.addChild(
+				new Text(
+					theme.fg(
+						"dim",
+						"Wiggum requires a guidelines file to review against.",
+					),
+				),
+			);
 
-		const selectList = new SelectList(items, items.length, {
-			selectedPrefix: (text: string) => theme.fg("accent", text),
-			selectedText: (text: string) => theme.fg("accent", text),
-			description: (text: string) => theme.fg("muted", text),
-		});
+			const selectList = new SelectList(items, items.length, {
+				selectedPrefix: (text: string) => theme.fg("accent", text),
+				selectedText: (text: string) => theme.fg("accent", text),
+				description: (text: string) => theme.fg("muted", text),
+			});
 
-		selectList.onSelect = (item) => done(item.value as string);
-		selectList.onCancel = () => done(null);
+			selectList.onSelect = (item) => done(item.value as string);
+			selectList.onCancel = () => done(null);
 
-		container.addChild(selectList);
-		container.addChild(new Text(theme.fg("dim", "Enter to confirm, Esc to cancel")));
-		container.addChild(new DynamicBorder((str: string) => theme.fg("accent", str)));
+			container.addChild(selectList);
+			container.addChild(
+				new Text(theme.fg("dim", "Enter to confirm, Esc to cancel")),
+			);
+			container.addChild(
+				new DynamicBorder((str: string) => theme.fg("accent", str)),
+			);
 
-		return {
-			render(width: number) { return container.render(width); },
-			invalidate() { container.invalidate(); },
-			handleInput(data: string) { selectList.handleInput(data); tui.requestRender(); },
-		};
-	}, { overlay: true, overlayOptions: { anchor: "center", width: 60, maxHeight: "50%" } });
+			return {
+				render(width: number) {
+					return container.render(width);
+				},
+				invalidate() {
+					container.invalidate();
+				},
+				handleInput(data: string) {
+					selectList.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		},
+		{
+			overlay: true,
+			overlayOptions: { anchor: "center", width: 60, maxHeight: "50%" },
+		},
+	);
 
 	if (result === "create") {
 		return { action: "create", path: proposedPath };
@@ -309,13 +389,16 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 		focus?: string,
 		maxOverride?: number,
 		specPath?: string,
+		modelOverride?: string,
 	): Promise<LoopResult | null> {
 		if (loopActive) {
-			if (ctx.hasUI) ctx.ui.notify("Wiggum loop already active", "warning");
+			if (ctx.hasUI)
+				ctx.ui.notify("Wiggum loop already active", "warning");
 			return null;
 		}
 
 		const max = maxOverride ?? settings.maxIterations;
+		const effectiveModel = modelOverride ?? settings.model ?? undefined;
 		const exec = makeExec();
 		const cwd = ctx.cwd;
 		const exitScript = resolveExitScript(settings, cwd);
@@ -332,7 +415,11 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				if (!content) throw new Error("File is empty");
 				guidelinesContent = content;
 			} catch (err) {
-				if (ctx.hasUI) ctx.ui.notify(`Cannot read spec: ${specPath} — ${err}`, "error");
+				if (ctx.hasUI)
+					ctx.ui.notify(
+						`Cannot read spec: ${specPath} — ${err}`,
+						"error",
+					);
 				return null;
 			}
 		}
@@ -343,7 +430,11 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				const content = fs.readFileSync(activeSpec, "utf-8").trim();
 				if (content) guidelinesContent = content;
 			} catch {
-				if (ctx.hasUI) ctx.ui.notify(`Bound spec unreadable: ${activeSpec}, trying auto-load...`, "warning");
+				if (ctx.hasUI)
+					ctx.ui.notify(
+						`Bound spec unreadable: ${activeSpec}, trying auto-load...`,
+						"warning",
+					);
 			}
 		}
 
@@ -419,26 +510,36 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 					exec,
 					logFile,
 					signal: abortController.signal,
+					modelOverride: effectiveModel,
 					getMaxIterations: () => currentMax,
 					onIterationStart: (iter, mx) => {
 						currentIteration = iter;
 						updateStatus(ctx);
-						if (ctx.hasUI) ctx.ui.notify(`Wiggum iteration ${iter}/${mx} starting...`, "info");
+						if (ctx.hasUI)
+							ctx.ui.notify(
+								`Wiggum iteration ${iter}/${mx} starting...`,
+								"info",
+							);
 					},
 					onIterationEnd: (iter, mx, reason) => {
 						currentIteration = iter;
 						updateStatus(ctx);
-						if (ctx.hasUI) ctx.ui.notify(`Wiggum iteration ${iter}/${mx}: ${reason}`, "info");
+						if (ctx.hasUI)
+							ctx.ui.notify(
+								`Wiggum iteration ${iter}/${mx}: ${reason}`,
+								"info",
+							);
 					},
 					onProgress: (state) => renderWiggumWidget(ctx, state),
 				},
 			);
 
-			const msg = result.exitReason === "clean"
-				? `Wiggum quality loop complete after ${result.iterations} iteration(s): all gates passed`
-				: result.exitReason === "stopped"
-					? `Wiggum quality loop stopped after ${result.iterations} iteration(s)`
-					: `Wiggum quality loop reached max iterations (${result.iterations})`;
+			const msg =
+				result.exitReason === "clean"
+					? `Wiggum quality loop complete after ${result.iterations} iteration(s): all gates passed`
+					: result.exitReason === "stopped"
+						? `Wiggum quality loop stopped after ${result.iterations} iteration(s)`
+						: `Wiggum quality loop reached max iterations (${result.iterations})`;
 
 			if (ctx.hasUI) ctx.ui.notify(msg, "info");
 			lastResult = result;
@@ -465,7 +566,8 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 	// ── Commands ─────────────────────────────────────────────
 
 	pi.registerCommand("wiggum", {
-		description: "Wiggum loop: /wiggum quality [focus], /wiggum stop, /wiggum status, /wiggum max N, /wiggum guide [path|clear]",
+		description:
+			"Wiggum loop: /wiggum quality [focus], /wiggum stop, /wiggum status, /wiggum max N, /wiggum guide [path|clear]",
 		handler: async (args, ctx) => {
 			if (!ctx.hasUI) return;
 			const parts = args.trim().split(/\s+/);
@@ -505,7 +607,7 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 
 			if (subcommand === "max") {
 				const n = parseInt(parts[1] ?? "", 10);
-				if (isNaN(n) || n < 1) {
+				if (Number.isNaN(n) || n < 1) {
 					ctx.ui.notify("Usage: /wiggum max <number>", "error");
 					return;
 				}
@@ -532,7 +634,10 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 						activeSpec = guideArg;
 						ctx.ui.notify(`Spec bound: ${guideArg}`, "info");
 					} catch {
-						ctx.ui.notify(`Cannot read spec file: ${guideArg}`, "error");
+						ctx.ui.notify(
+							`Cannot read spec file: ${guideArg}`,
+							"error",
+						);
 					}
 				}
 				return;
@@ -545,7 +650,10 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 				if (specIdx !== -1) {
 					const specArg = qualityParts[specIdx + 1];
 					if (!specArg) {
-						ctx.ui.notify("Usage: /wiggum quality --spec <path> [focus]", "error");
+						ctx.ui.notify(
+							"Usage: /wiggum quality --spec <path> [focus]",
+							"error",
+						);
 						return;
 					}
 					try {
@@ -557,11 +665,32 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 					specPath = specArg;
 					qualityParts.splice(specIdx, 2);
 				}
+				let modelOverride: string | undefined;
+				const modelIdx = qualityParts.indexOf("--model");
+				if (modelIdx !== -1) {
+					const modelArg = qualityParts[modelIdx + 1];
+					if (!modelArg) {
+						ctx.ui.notify(
+							"Usage: /wiggum quality --model <provider/id>",
+							"error",
+						);
+						return;
+					}
+					modelOverride = modelArg;
+					qualityParts.splice(modelIdx, 2);
+				}
 				const focus = qualityParts.join(" ").trim() || undefined;
 
 				const scope = await pickScope(ctx);
 				if (!scope) return; // user cancelled
-				startQualityLoop(ctx, scope, focus, undefined, specPath).catch((err) => {
+				startQualityLoop(
+					ctx,
+					scope,
+					focus,
+					undefined,
+					specPath,
+					modelOverride,
+				).catch((err) => {
 					if (ctx.hasUI) {
 						ctx.ui.notify(
 							`Wiggum loop error: ${err instanceof Error ? err.message : String(err)}`,
@@ -584,32 +713,51 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "wiggum_loop",
 		description:
-			"Run a wiggum (ralph) loop — fresh-agent iterations until "
-			+ "exit gate passes. Supports quality review flow.",
+			"Run a wiggum (ralph) loop — fresh-agent iterations until " +
+			"exit gate passes. Supports quality review flow.",
 		parameters: Type.Object({
 			flow: Type.String({
 				description: 'Flow type: "quality"',
 			}),
-			start: Type.Optional(Type.Boolean({
-				description: "Start the loop",
-			})),
-			stop: Type.Optional(Type.Boolean({
-				description: "Stop the loop",
-			})),
-			scope: Type.Optional(Type.String({
-				description:
-					'"uncommitted" | "last-commit" | "branch" | freeform text',
-			})),
-			focus: Type.Optional(Type.String({
-				description: "Additional review focus text",
-			})),
-			maxIterations: Type.Optional(Type.Number({
-				description: "Override max iterations",
-				minimum: 1,
-			})),
-			spec: Type.Optional(Type.String({
-				description: "Path to spec/guidelines file to review against",
-			})),
+			start: Type.Optional(
+				Type.Boolean({
+					description: "Start the loop",
+				}),
+			),
+			stop: Type.Optional(
+				Type.Boolean({
+					description: "Stop the loop",
+				}),
+			),
+			scope: Type.Optional(
+				Type.String({
+					description:
+						'"uncommitted" | "last-commit" | "branch" | freeform text',
+				}),
+			),
+			focus: Type.Optional(
+				Type.String({
+					description: "Additional review focus text",
+				}),
+			),
+			maxIterations: Type.Optional(
+				Type.Number({
+					description: "Override max iterations",
+					minimum: 1,
+				}),
+			),
+			spec: Type.Optional(
+				Type.String({
+					description: "Path to spec/guidelines file to review against",
+				}),
+			),
+			model: Type.Optional(
+				Type.String({
+					description:
+						"Model override (provider/id format, " +
+						"e.g. 'anthropic/claude-sonnet-4')",
+				}),
+			),
 		}),
 
 		async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -626,37 +774,53 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 			}
 
 			if (params.start && params.flow === "quality") {
-				const scope: ReviewScope = (params.scope as ReviewScope) || "uncommitted";
+				const scope: ReviewScope =
+					(params.scope as ReviewScope) || "uncommitted";
 
 				// Pre-check guidelines in tool path — startQualityLoop
 				// returns bare null with no context for the caller.
 				if (!ctx.hasUI) {
 					const exec = makeExec();
-					const hasGuidelines = params.spec
-						|| activeSpec
-						|| await loadProjectGuidelines(ctx.cwd, exec);
+					const hasGuidelines =
+						params.spec ||
+						activeSpec ||
+						(await loadProjectGuidelines(ctx.cwd, exec));
 					if (!hasGuidelines) {
-						const proposedPath = await resolveGuidelinesPath(ctx.cwd, exec);
+						const proposedPath = await resolveGuidelinesPath(
+							ctx.cwd,
+							exec,
+						);
 						return {
-							content: [{
-								type: "text",
-								text: `No review guidelines found. Create doc/review-guidelines.md at: ${proposedPath}\nOr pass spec parameter with a path to your guidelines file.`,
-							}],
+							content: [
+								{
+									type: "text",
+									text: `No review guidelines found. Create doc/review-guidelines.md at: ${proposedPath}\nOr pass spec parameter with a path to your guidelines file.`,
+								},
+							],
 							isError: true,
 						};
 					}
 				}
 
-				const result = await startQualityLoop(ctx, scope, params.focus, params.maxIterations, params.spec);
+				const result = await startQualityLoop(
+					ctx,
+					scope,
+					params.focus,
+					params.maxIterations,
+					params.spec,
+					params.model,
+				);
 				return {
-					content: [{
-						type: "text",
-						text: JSON.stringify({
-							iterations: result?.iterations ?? 0,
-							exitReason: result?.exitReason ?? "error",
-							logFile: lastLogFile,
-						}),
-					}],
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								iterations: result?.iterations ?? 0,
+								exitReason: result?.exitReason ?? "error",
+								logFile: lastLogFile,
+							}),
+						},
+					],
 				};
 			}
 
@@ -669,10 +833,12 @@ export default function wiggumExtension(pi: ExtensionAPI) {
 					? `Wiggum loop inactive. Last run: ${lastResult.iterations} iteration(s), exit: ${lastResult.exitReason}.${logSuffix}${specInfo}`
 					: `Wiggum loop inactive (max: ${settings.maxIterations})${specInfo}`;
 			return {
-				content: [{
-					type: "text",
-					text: statusText,
-				}],
+				content: [
+					{
+						type: "text",
+						text: statusText,
+					},
+				],
 			};
 		},
 	});

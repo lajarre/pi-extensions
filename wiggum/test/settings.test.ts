@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
 	DEFAULT_MAX_ITERATIONS,
@@ -11,7 +14,9 @@ import {
 	type WiggumSettings,
 } from "../settings.js";
 
-function defaultSettings(overrides: Partial<WiggumSettings> = {}): WiggumSettings {
+function defaultSettings(
+	overrides: Partial<WiggumSettings> = {},
+): WiggumSettings {
 	return {
 		maxIterations: DEFAULT_MAX_ITERATIONS,
 		minIterations: DEFAULT_MIN_ITERATIONS,
@@ -19,17 +24,43 @@ function defaultSettings(overrides: Partial<WiggumSettings> = {}): WiggumSetting
 		testCommand: DEFAULT_TEST_COMMAND,
 		exitScript: null,
 		reviewPrompt: DEFAULT_WIGGUM_REVIEW_PROMPT,
+		model: null,
 		...overrides,
 	};
 }
 
+async function loadSettingsWithTempFile(
+	payload: object,
+): Promise<WiggumSettings> {
+	const home = mkdtempSync(join(tmpdir(), "pi-wiggum-settings-"));
+	const settingsDir = join(home, ".pi", "agent");
+	mkdirSync(settingsDir, { recursive: true });
+	writeFileSync(
+		join(settingsDir, "settings.json"),
+		JSON.stringify(payload),
+	);
+	const oldHome = process.env.HOME;
+	process.env.HOME = home;
+	try {
+		const suffix = `${Date.now()}-${Math.random()}`;
+		const settingsModule = (await import(
+			`../settings.js?cache=${suffix}`
+		)) as typeof import("../settings.js");
+		return settingsModule.loadSettings();
+	} finally {
+		if (oldHome === undefined) {
+			delete process.env.HOME;
+		} else {
+			process.env.HOME = oldHome;
+		}
+	}
+}
+
 describe("resolveExitScript", () => {
 	it("returns env var when set", () => {
-		const result = resolveExitScript(
-			defaultSettings(),
-			"/tmp",
-			{ WIGGUM_EXIT_SCRIPT: "/path/to/script.sh" },
-		);
+		const result = resolveExitScript(defaultSettings(), "/tmp", {
+			WIGGUM_EXIT_SCRIPT: "/path/to/script.sh",
+		});
 		assert.equal(result, "/path/to/script.sh");
 	});
 
@@ -70,6 +101,25 @@ describe("resolveExitScript", () => {
 	});
 });
 
+describe("loadSettings", () => {
+	it("model defaults to null when not set", async () => {
+		const result = await loadSettingsWithTempFile({
+			wiggumLoop: {},
+		});
+		assert.equal(result.model, null);
+	});
+
+	it("model loaded from settings", async () => {
+		const model = "anthropic/claude-sonnet-4";
+		const result = await loadSettingsWithTempFile({
+			wiggumLoop: {
+				model,
+			},
+		});
+		assert.equal(result.model, model);
+	});
+});
+
 describe("default constants", () => {
 	it("DEFAULT_MAX_ITERATIONS is 10", () => {
 		assert.equal(DEFAULT_MAX_ITERATIONS, 10);
@@ -98,9 +148,17 @@ describe("REVIEW_GUIDELINES_TEMPLATE", () => {
 	});
 
 	it("contains key headings", () => {
-		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("## review criteria"));
-		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("### Priority levels"));
-		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("### Review priorities"));
-		assert.ok(REVIEW_GUIDELINES_TEMPLATE.includes("## Project-specific"));
+		assert.ok(
+			REVIEW_GUIDELINES_TEMPLATE.includes("## review criteria"),
+		);
+		assert.ok(
+			REVIEW_GUIDELINES_TEMPLATE.includes("### Priority levels"),
+		);
+		assert.ok(
+			REVIEW_GUIDELINES_TEMPLATE.includes("### Review priorities"),
+		);
+		assert.ok(
+			REVIEW_GUIDELINES_TEMPLATE.includes("## Project-specific"),
+		);
 	});
 });

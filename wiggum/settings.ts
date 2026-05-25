@@ -1,6 +1,6 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -17,12 +17,16 @@ export interface WiggumSettings {
 	testCommand: string;
 	exitScript: string | null;
 	reviewPrompt: string;
+	model: string | null;
 }
 
 // ── Constants ────────────────────────────────────────────────
 
 export const SETTINGS_PATH = join(
-	homedir(), ".pi", "agent", "settings.json",
+	homedir(),
+	".pi",
+	"agent",
+	"settings.json",
 );
 
 export const DEFAULT_STOP_SIGNAL = "WIGGUM_STOP";
@@ -140,6 +144,7 @@ interface RawSettings {
 	testCommand?: string;
 	exitScript?: string;
 	reviewPrompt?: string;
+	model?: string;
 }
 
 export function loadSettings(): WiggumSettings {
@@ -177,6 +182,10 @@ export function loadSettings(): WiggumSettings {
 			typeof raw.reviewPrompt === "string" && raw.reviewPrompt.trim()
 				? raw.reviewPrompt.trim()
 				: DEFAULT_WIGGUM_REVIEW_PROMPT,
+		model:
+			typeof raw.model === "string" && raw.model.trim()
+				? raw.model.trim()
+				: null,
 	};
 }
 
