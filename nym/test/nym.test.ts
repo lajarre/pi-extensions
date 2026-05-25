@@ -9,6 +9,7 @@
 
 import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
+import nym from "../index.js";
 import {
 	assembleSegments,
 	detectWorktree,
@@ -54,8 +55,19 @@ function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 	const handlers: Record<string, Handler[]> = {};
 	const notifications: Notification[] = [];
 	const terminalInputListeners = new Set<(data: string) => any>();
+	const statusUpdates: { key: string; text: string | undefined }[] = [];
 	let sessionName: string | undefined;
 	let editorText = "";
+	let hasUI = true;
+	let stale = false;
+	const cwd = opts.cwd ?? "/tmp/mock-project/mock-worktree";
+
+	function assertCtxActive() {
+		if (!stale) return;
+		throw new Error(
+			"This extension ctx is stale after session replacement or reload.",
+		);
+	}
 
 	const ui = {
 		notify(message: string, level: string) {
@@ -71,7 +83,9 @@ function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 		pasteToEditor(text: string) {
 			editorText += text;
 		},
-		setStatus(_key: string, _text: string | undefined) {},
+		setStatus(key: string, text: string | undefined) {
+			statusUpdates.push({ key, text });
+		},
 		getEditorText() {
 			return editorText;
 		},
@@ -131,12 +145,33 @@ function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 	};
 
 	const ctx = {
-		hasUI: true,
-		ui,
-		cwd: opts.cwd ?? "/tmp/mock-project/mock-worktree",
-		sessionManager,
-		modelRegistry,
-		model: opts.hasModel === false ? undefined : expensiveModel,
+		get hasUI() {
+			assertCtxActive();
+			return hasUI;
+		},
+		set hasUI(value: boolean) {
+			hasUI = value;
+		},
+		get ui() {
+			assertCtxActive();
+			return ui;
+		},
+		get cwd() {
+			assertCtxActive();
+			return cwd;
+		},
+		get sessionManager() {
+			assertCtxActive();
+			return sessionManager;
+		},
+		get modelRegistry() {
+			assertCtxActive();
+			return modelRegistry;
+		},
+		get model() {
+			assertCtxActive();
+			return opts.hasModel === false ? undefined : expensiveModel;
+		},
 	};
 
 	const commands = new Map<
@@ -181,9 +216,16 @@ function createMockPi(opts: { hasModel?: boolean; cwd?: string } = {}) {
 		handlers,
 		commands,
 		notifications,
+		statusUpdates,
 		getSessionName: () => sessionName,
 		setSessionName: (n: string | undefined) => {
 			sessionName = n;
+		},
+		invalidateCtx: () => {
+			stale = true;
+		},
+		restoreCtx: () => {
+			stale = false;
 		},
 		async fire(event: string, eventData: any = {}) {
 			for (const h of handlers[event] ?? []) {
@@ -232,6 +274,7 @@ function registerTestHandlers(
 		structuredResult?: string;
 		fallbackResult?: string;
 		suggestedResult?: string;
+		beforeSuggestedResult?: () => Promise<void> | void;
 	} = {},
 ) {
 	const SOFT = 10;
@@ -242,14 +285,17 @@ function registerTestHandlers(
 	let softNotified = false;
 	let generating = false;
 	let suggestedName: string | null = api.getSessionName() ?? null;
+	let suggestionVersion = 0;
+	let deriving = false;
 	let removeTerminalHook: (() => void) | undefined;
+	let lastSuggestionUpdate: Promise<void> = Promise.resolve();
 
 	function isActive(
 		ctx: { hasUI: boolean },
 		options: { ignoreExistingName?: boolean } = {},
 	) {
 		return (
-			ctx.hasUI &&
+			hasActiveUI(ctx) &&
 			(options.ignoreExistingName || !api.getSessionName()) &&
 			!generating
 		);
@@ -260,13 +306,50 @@ function registerTestHandlers(
 		suggestedName = name;
 	}
 
+	function isStaleContextError(error: unknown): boolean {
+		const message =
+			error instanceof Error ? error.message : String(error);
+		return message.includes("extension ctx is stale");
+	}
+
+	function guardStaleContext(action: () => void): boolean {
+		try {
+			action();
+			return true;
+		} catch (error) {
+			if (isStaleContextError(error)) return false;
+			throw error;
+		}
+	}
+
+	function hasActiveUI(ctx: { hasUI: boolean }): boolean {
+		let active = false;
+		guardStaleContext(() => {
+			active = ctx.hasUI;
+		});
+		return active;
+	}
+
+	function withActiveUI(
+		ctx: { hasUI: boolean; ui?: any },
+		action: (ui: any) => void,
+	): boolean {
+		return guardStaleContext(() => {
+			if (!ctx.hasUI) return;
+			action(ctx.ui);
+		});
+	}
+
 	function softNotify(ctx: { hasUI: boolean; ui: any }) {
-		if (!ctx.hasUI || api.getSessionName() || softNotified) return;
+		if (api.getSessionName() || softNotified) return;
+		if (!hasActiveUI(ctx)) return;
 		softNotified = true;
-		ctx.ui.notify(
-			"Session unnamed — /nym to auto-name, /name <name> to set one.",
-			"info",
-		);
+		withActiveUI(ctx, (ui) => {
+			ui.notify(
+				"Session unnamed — /nym to auto-name, /name <name> to set one.",
+				"info",
+			);
+		});
 	}
 
 	function gatherContext(ctx: {
@@ -365,6 +448,50 @@ function registerTestHandlers(
 		suggestedName = trimmed || null;
 	}
 
+	function showGenerating(ctx: any) {
+		withActiveUI(ctx, (ui) => {
+			ui?.setStatus?.("nym", "✦ naming…");
+		});
+	}
+
+	function clearGenerating(ctx: any) {
+		withActiveUI(ctx, (ui) => {
+			ui?.setStatus?.("nym", undefined);
+		});
+	}
+
+	async function updateSuggestedName(ctx: any): Promise<void> {
+		const version = ++suggestionVersion;
+		deriving = true;
+		showGenerating(ctx);
+
+		try {
+			const context = gatherContext(ctx);
+			opts.captureContext?.(context);
+			if (opts.beforeSuggestedResult) {
+				await opts.beforeSuggestedResult();
+			}
+
+			const raw =
+				opts.suggestedResult ??
+				opts.structuredResult ??
+				opts.autoNameResult ??
+				"test-session-name";
+			const trimmed = raw.trim().slice(0, 60);
+			if (version === suggestionVersion && hasActiveUI(ctx)) {
+				suggestedName = trimmed || null;
+			}
+		} catch (error) {
+			if (isStaleContextError(error)) return;
+			if (version === suggestionVersion) {
+				suggestedName = null;
+			}
+		} finally {
+			deriving = false;
+			clearGenerating(ctx);
+		}
+	}
+
 	async function autoName(
 		ctx: any,
 		options: { ignoreExistingName?: boolean } = {},
@@ -441,7 +568,17 @@ function registerTestHandlers(
 		getArgumentCompletions: (prefix: string) => {
 			const current = api.getSessionName()?.trim();
 			const value = current || suggestedName?.trim();
-			if (!value) return null;
+			if (!value) {
+				return deriving
+					? [
+							{
+								value: "",
+								label: "✦ deriving…",
+								description: "try again shortly",
+							},
+						]
+					: null;
+			}
 			if (prefix && !value.startsWith(prefix)) return null;
 
 			return [
@@ -490,11 +627,11 @@ function registerTestHandlers(
 		turnCount = 0;
 		softNotified = false;
 		generating = false;
-		suggestedName =
-			api.getSessionName() ??
-			ctx?.cwd?.split("/")?.filter(Boolean)?.at(-1) ??
-			null;
-		if (ctx?.hasUI) computeSuggestedName(ctx);
+		suggestedName = api.getSessionName() ?? null;
+		suggestionVersion++;
+		if (ctx && hasActiveUI(ctx)) {
+			lastSuggestionUpdate = updateSuggestedName(ctx);
+		}
 	}
 
 	api.on("session_start", async (_event: any, ctx: any) => {
@@ -522,17 +659,20 @@ function registerTestHandlers(
 			turnCount >= SOFT &&
 			!softNotified &&
 			!api.getSessionName() &&
-			ctx.hasUI
+			hasActiveUI(ctx)
 		) {
 			softNotify(ctx);
 		}
 
-		if (!api.getSessionName() && ctx.hasUI) computeSuggestedName(ctx);
+		if (!api.getSessionName() && hasActiveUI(ctx)) {
+			lastSuggestionUpdate = updateSuggestedName(ctx);
+		}
 	});
 
 	return {
 		getTurnCount: () => turnCount,
 		getSuggestedName: () => suggestedName,
+		getLastSuggestionUpdate: () => lastSuggestionUpdate,
 	};
 }
 
@@ -2103,6 +2243,52 @@ describe("nym", () => {
 				"Name should not change",
 			);
 			assert.equal(mock.notifications.length, 0, "No notifications");
+		});
+	});
+
+	describe("stale context guard", () => {
+		it("should ignore a stale ctx while clearing async suggestion status", async () => {
+			const mock = createMockPi();
+			const harness = registerTestHandlers(mock.api, {
+				suggestedResult: "project:branch:suggested",
+				beforeSuggestedResult: () => {
+					mock.invalidateCtx();
+				},
+			});
+
+			await mock.fire("session_start");
+
+			await assert.doesNotReject(harness.getLastSuggestionUpdate());
+			assert.equal(harness.getSuggestedName(), null);
+		});
+
+		it("should ignore stale ctx in the real extension suggestion path", async () => {
+			const mock = createMockPi();
+			nym(mock.api);
+
+			const originalGetAuth =
+				mock.ctx.modelRegistry.getApiKeyAndHeaders;
+			mock.ctx.modelRegistry.getApiKeyAndHeaders = async (
+				model: any,
+			) => {
+				mock.invalidateCtx();
+				return originalGetAuth(model);
+			};
+
+			const rejections: unknown[] = [];
+			const onUnhandledRejection = (reason: unknown) => {
+				rejections.push(reason);
+			};
+			process.on("unhandledRejection", onUnhandledRejection);
+			try {
+				await mock.fire("session_start");
+				await flushAsync();
+				await flushAsync();
+
+				assert.equal(rejections.length, 0);
+			} finally {
+				process.off("unhandledRejection", onUnhandledRejection);
+			}
 		});
 	});
 

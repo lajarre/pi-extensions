@@ -24,7 +24,7 @@
 
 import { appendFileSync } from "node:fs";
 
-import { complete, type Message } from "@mariozechner/pi-ai";
+import type { Message } from "@mariozechner/pi-ai";
 import type {
 	ExtensionAPI,
 	SessionEntry,
@@ -77,29 +77,80 @@ export default function nym(pi: ExtensionAPI) {
 
 	// ── Helpers ──────────────────────────────────────────────────────────
 
-	function isActive(
-		ctx: { hasUI: boolean },
-		options: { ignoreExistingName?: boolean } = {},
-	): boolean {
-		return (
-			ctx.hasUI &&
-			(options.ignoreExistingName || !pi.getSessionName()) &&
-			!generating
-		);
-	}
-
 	function markNamed(name: string) {
 		softNotified = true;
 		suggestedName = name;
 		suggestionVersion++;
 	}
 
+	function isStaleContextError(error: unknown): boolean {
+		const message =
+			error instanceof Error ? error.message : String(error);
+		return message.includes("extension ctx is stale");
+	}
+
+	function guardStaleContext(
+		label: string,
+		action: () => void,
+	): boolean {
+		try {
+			action();
+			return true;
+		} catch (error) {
+			if (isStaleContextError(error)) {
+				dbg(`${label}: stale context, ignoring`);
+				return false;
+			}
+			throw error;
+		}
+	}
+
+	function canUseContext(ctx: { hasUI: boolean }): boolean {
+		return guardStaleContext("ctx", () => {
+			void ctx.hasUI;
+		});
+	}
+
+	function hasActiveUI(ctx: { hasUI: boolean }): boolean {
+		let active = false;
+		guardStaleContext("ctx.hasUI", () => {
+			active = ctx.hasUI;
+		});
+		return active;
+	}
+
+	function withActiveUI(
+		ctx: { hasUI: boolean; ui?: any },
+		label: string,
+		action: (ui: any) => void,
+	): boolean {
+		return guardStaleContext(label, () => {
+			if (!ctx.hasUI) return;
+			action(ctx.ui);
+		});
+	}
+
+	function isActive(
+		ctx: { hasUI: boolean },
+		options: { ignoreExistingName?: boolean } = {},
+	): boolean {
+		return (
+			hasActiveUI(ctx) &&
+			(options.ignoreExistingName || !pi.getSessionName()) &&
+			!generating
+		);
+	}
+
 	function showGenerating(ctx: any) {
-		ctx.ui?.setStatus?.("nym", "✦ naming…");
+		withActiveUI(ctx, "showGenerating", (ui) => {
+			ui?.setStatus?.("nym", "✦ naming…");
+		});
 	}
 
 	function clearGenerating(ctx: any) {
-		ctx.ui?.setStatus?.("nym", undefined);
+		withActiveUI(ctx, "clearGenerating", (ui) => {
+			ui?.setStatus?.("nym", undefined);
+		});
 	}
 
 	function sanitizeGeneratedName(raw: string): string {
@@ -113,22 +164,28 @@ export default function nym(pi: ExtensionAPI) {
 	}
 
 	function applyName(
-		ctx: { ui: { notify(message: string, type?: "info"): void } },
+		ctx: any,
 		name: string,
 		mode: "auto" | "manual",
 	): void {
+		if (!canUseContext(ctx)) return;
+
 		pi.setSessionName(name);
 		markNamed(name);
 
 		if (mode === "manual") {
-			ctx.ui?.notify?.(`Session named: ${name}`, "info");
+			withActiveUI(ctx, "applyName.manualNotify", (ui) => {
+				ui?.notify?.(`Session named: ${name}`, "info");
+			});
 			return;
 		}
 
-		ctx.ui?.notify?.(
-			`Auto-named: ${name}. /nym to re-derive, /name <name> to change.`,
-			"info",
-		);
+		withActiveUI(ctx, "applyName.autoNotify", (ui) => {
+			ui?.notify?.(
+				`Auto-named: ${name}. /nym to re-derive, /name <name> to change.`,
+				"info",
+			);
+		});
 	}
 
 	/** Extract text from the last 3 user messages (most recent first, ≤500 chars). */
@@ -264,11 +321,12 @@ export default function nym(pi: ExtensionAPI) {
 	}
 
 	/** Single-model prompt call. Throws on failure. */
-	function callModel(
+	async function callModel(
 		prompt: string,
 		context: string,
 		resolved: ResolvedModel,
 	): Promise<string> {
+		const { complete } = await import("@mariozechner/pi-ai");
 		const userMessage: Message = {
 			role: "user",
 			content: [
@@ -280,7 +338,7 @@ export default function nym(pi: ExtensionAPI) {
 			timestamp: Date.now(),
 		};
 
-		return complete(
+		const response = await complete(
 			resolved.model,
 			{ systemPrompt: prompt, messages: [userMessage] },
 			{
@@ -288,15 +346,15 @@ export default function nym(pi: ExtensionAPI) {
 				headers: resolved.headers,
 				maxTokens: 64,
 			},
-		).then((response) =>
-			response.content
-				.filter(
-					(c): c is { type: "text"; text: string } => c.type === "text",
-				)
-				.map((c) => c.text)
-				.join("")
-				.trim(),
 		);
+
+		return response.content
+			.filter(
+				(c): c is { type: "text"; text: string } => c.type === "text",
+			)
+			.map((c) => c.text)
+			.join("")
+			.trim();
 	}
 
 	/**
@@ -359,11 +417,13 @@ export default function nym(pi: ExtensionAPI) {
 		options: { allowEmptyContext?: boolean } = {},
 	): Promise<string | null> {
 		const context = gatherContext(ctx);
+		const cwd = ctx.cwd;
 		if (!context && !options.allowEmptyContext) return null;
 
 		let candidates: ResolvedModel[] = [];
 		if (context) {
 			candidates = await resolveModelCandidates(ctx);
+			if (!canUseContext(ctx)) return null;
 		}
 
 		const llmCallback: DescriptionLLMFn = async (
@@ -377,7 +437,7 @@ export default function nym(pi: ExtensionAPI) {
 			);
 		};
 
-		return structuredName(ctx.cwd, piExec, context, llmCallback);
+		return structuredName(cwd, piExec, context, llmCallback);
 	}
 
 	async function updateSuggestedName(ctx: any): Promise<void> {
@@ -390,11 +450,15 @@ export default function nym(pi: ExtensionAPI) {
 				allowEmptyContext: true,
 			});
 
-			if (version === suggestionVersion) {
+			if (version === suggestionVersion && canUseContext(ctx)) {
 				// Bare project name isn't useful as a tab suggestion.
 				suggestedName = suggestion?.includes(":") ? suggestion : null;
 			}
-		} catch {
+		} catch (error) {
+			if (isStaleContextError(error)) {
+				dbg("updateSuggestedName: stale context, abort");
+				return;
+			}
 			if (version === suggestionVersion) {
 				suggestedName = null;
 			}
@@ -414,88 +478,112 @@ export default function nym(pi: ExtensionAPI) {
 			hasName: !!pi.getSessionName(),
 			generating,
 		});
-		if (!isActive(ctx, options)) {
-			dbg("autoName: not active, skip");
-			return;
-		}
 
-		const context = gatherContext(ctx);
-		dbg(
-			"autoName: context length:",
-			context.length,
-			context ? `"${context.slice(0, 80)}..."` : "(empty)",
-		);
-		if (!context) {
-			dbg("autoName: no context, skip");
-			return;
-		}
-
-		const candidates = await resolveModelCandidates(ctx);
-		if (candidates.length === 0) {
-			dbg("autoName: no candidates, softNotify");
-			softNotify(ctx);
-			return;
-		}
-
-		generating = true;
-		showGenerating(ctx);
 		try {
-			const llmCallback: DescriptionLLMFn = async (
-				contextText: string,
-			) => {
-				return generateWithPrompt(
-					DESCRIPTION_PROMPT,
-					contextText,
+			if (!isActive(ctx, options)) {
+				dbg("autoName: not active, skip");
+				return;
+			}
+
+			const context = gatherContext(ctx);
+			const cwd = ctx.cwd;
+			dbg(
+				"autoName: context length:",
+				context.length,
+				context ? `"${context.slice(0, 80)}..."` : "(empty)",
+			);
+			if (!context) {
+				dbg("autoName: no context, skip");
+				return;
+			}
+
+			const candidates = await resolveModelCandidates(ctx);
+			if (!canUseContext(ctx)) {
+				dbg("autoName: stale context after model resolution, abort");
+				return;
+			}
+			if (candidates.length === 0) {
+				dbg("autoName: no candidates, softNotify");
+				softNotify(ctx);
+				return;
+			}
+
+			generating = true;
+			showGenerating(ctx);
+			try {
+				const llmCallback: DescriptionLLMFn = async (
+					contextText: string,
+				) => {
+					return generateWithPrompt(
+						DESCRIPTION_PROMPT,
+						contextText,
+						candidates,
+					);
+				};
+
+				const name = await structuredName(
+					cwd,
+					piExec,
+					context,
+					llmCallback,
+				);
+				dbg("autoName: structuredName →", JSON.stringify(name));
+
+				// Multi-segment name (has ":") is good. A bare project name
+				// (no ":") needs a description appended via fallback.
+				if (name?.includes(":")) {
+					dbg("autoName: applying multi-segment name");
+					applyName(ctx, name, "auto");
+					return;
+				}
+
+				dbg("autoName: bare name, trying fallback");
+				const fallback = await generateFallbackName(
+					context,
 					candidates,
 				);
-			};
+				dbg("autoName: fallback →", JSON.stringify(fallback));
+				if (fallback && name) {
+					applyName(ctx, `${name}:${fallback}`, "auto");
+					return;
+				}
+				if (fallback) {
+					applyName(ctx, fallback, "auto");
+					return;
+				}
 
-			const name = await structuredName(
-				ctx.cwd,
-				piExec,
-				context,
-				llmCallback,
-			);
-			dbg("autoName: structuredName →", JSON.stringify(name));
-
-			// Multi-segment name (has ":") is good. A bare project name
-			// (no ":") needs a description appended via fallback.
-			if (name?.includes(":")) {
-				dbg("autoName: applying multi-segment name");
-				applyName(ctx, name, "auto");
+				// All LLM calls failed — stay unnamed, retry on next trigger.
+				dbg("autoName: all failed, softNotify");
+				softNotify(ctx);
+			} catch (error) {
+				if (isStaleContextError(error)) {
+					dbg("autoName: stale context, abort");
+					return;
+				}
+				softNotify(ctx);
+			} finally {
+				generating = false;
+				clearGenerating(ctx);
+			}
+		} catch (error) {
+			if (isStaleContextError(error)) {
+				dbg("autoName: stale context before generation, abort");
 				return;
 			}
-
-			dbg("autoName: bare name, trying fallback");
-			const fallback = await generateFallbackName(context, candidates);
-			dbg("autoName: fallback →", JSON.stringify(fallback));
-			if (fallback && name) {
-				applyName(ctx, `${name}:${fallback}`, "auto");
-				return;
-			}
-			if (fallback) {
-				applyName(ctx, fallback, "auto");
-				return;
-			}
-
-			// All LLM calls failed — stay unnamed, retry on next trigger.
-			dbg("autoName: all failed, softNotify");
-			softNotify(ctx);
-		} catch {
-			softNotify(ctx);
-		} finally {
-			generating = false;
-			clearGenerating(ctx);
+			throw error;
 		}
 	}
 
 	function softNotify(ctx: { hasUI: boolean; ui: any }): void {
-		if (!ctx.hasUI || pi.getSessionName() || softNotified) return;
+		if (pi.getSessionName() || softNotified) return;
+		if (!hasActiveUI(ctx)) return;
 		softNotified = true;
-		ctx.ui?.notify?.(
-			"Session unnamed — /nym to auto-name, /name <name> to set one.",
-			"info",
-		);
+		withActiveUI(ctx, "softNotify", (ui) => {
+			ui?.notify?.(
+				"Session unnamed — /nym to auto-name, /name <name> to set one.",
+				"info",
+			);
+		});
 	}
 
 	function isBlankNymEditorText(text: string): boolean {
@@ -508,33 +596,41 @@ export default function nym(pi: ExtensionAPI) {
 		generating = false;
 		suggestedName = pi.getSessionName() ?? null;
 		suggestionVersion++;
-		if (ctx?.hasUI) {
+		if (ctx && hasActiveUI(ctx)) {
 			void updateSuggestedName(ctx);
 		}
 	}
 
 	async function forceAutoName(ctx: any): Promise<void> {
 		dbg("forceAutoName: enter");
-		await autoName(ctx, { ignoreExistingName: true });
-		if (pi.getSessionName()) {
-			dbg("forceAutoName: autoName succeeded:", pi.getSessionName());
-			return;
-		}
+		try {
+			await autoName(ctx, { ignoreExistingName: true });
+			if (pi.getSessionName()) {
+				dbg("forceAutoName: autoName succeeded:", pi.getSessionName());
+				return;
+			}
 
-		dbg(
-			"forceAutoName: autoName didn't name, trying deriveStructuredSuggestion",
-		);
-		const suggestion = await deriveStructuredSuggestion(ctx, {
-			allowEmptyContext: true,
-		});
-		dbg("forceAutoName: suggestion →", JSON.stringify(suggestion));
-		if (suggestion?.includes(":")) {
-			applyName(ctx, suggestion, "auto");
-			return;
-		}
+			dbg(
+				"forceAutoName: autoName didn't name, trying deriveStructuredSuggestion",
+			);
+			const suggestion = await deriveStructuredSuggestion(ctx, {
+				allowEmptyContext: true,
+			});
+			dbg("forceAutoName: suggestion →", JSON.stringify(suggestion));
+			if (suggestion?.includes(":")) {
+				applyName(ctx, suggestion, "auto");
+				return;
+			}
 
-		dbg("forceAutoName: falling back to updateSuggestedName");
-		await updateSuggestedName(ctx);
+			dbg("forceAutoName: falling back to updateSuggestedName");
+			await updateSuggestedName(ctx);
+		} catch (error) {
+			if (isStaleContextError(error)) {
+				dbg("forceAutoName: stale context, abort");
+				return;
+			}
+			throw error;
+		}
 	}
 
 	pi.registerCommand("nym", {
@@ -592,17 +688,31 @@ export default function nym(pi: ExtensionAPI) {
 	function installTerminalHook(ctx: any) {
 		removeTerminalHook?.();
 		removeTerminalHook = undefined;
-		if (!ctx.hasUI) return;
+		if (!hasActiveUI(ctx)) return;
 
-		removeTerminalHook = ctx.ui.onTerminalInput((data: string) => {
-			if (data !== "\r" && data !== "\n") return;
-			if (!isBlankNymEditorText(ctx.ui.getEditorText())) return;
+		withActiveUI(ctx, "installTerminalHook", (ui) => {
+			removeTerminalHook = ui.onTerminalInput((data: string) => {
+				if (data !== "\r" && data !== "\n") return;
 
-			ctx.ui.setEditorText("");
-			void forceAutoName(ctx).catch((error: unknown) => {
-				dbg("forceAutoName terminal hook failed:", error);
+				let editorText = "";
+				const hasEditorText = withActiveUI(
+					ctx,
+					"terminalHook.getEditorText",
+					(activeUi) => {
+						editorText = activeUi.getEditorText();
+					},
+				);
+				if (!hasEditorText) return;
+				if (!isBlankNymEditorText(editorText)) return;
+
+				withActiveUI(ctx, "terminalHook.clearEditor", (activeUi) => {
+					activeUi.setEditorText("");
+				});
+				void forceAutoName(ctx).catch((error: unknown) => {
+					dbg("forceAutoName terminal hook failed:", error);
+				});
+				return { consume: true };
 			});
-			return { consume: true };
 		});
 	}
 
@@ -633,14 +743,17 @@ export default function nym(pi: ExtensionAPI) {
 	/** Soft + hard trigger: turn count. */
 	pi.on("turn_end", async (_event, ctx) => {
 		turnCount++;
+		let activeUI = hasActiveUI(ctx);
 
 		if (turnCount >= HARD_THRESHOLD && isActive(ctx)) {
 			await autoName(ctx);
+			activeUI = hasActiveUI(ctx);
+			if (!activeUI) return;
 		} else if (
 			turnCount >= SOFT_THRESHOLD &&
 			!softNotified &&
 			!pi.getSessionName() &&
-			ctx.hasUI
+			activeUI
 		) {
 			softNotify(ctx);
 		}
@@ -648,7 +761,7 @@ export default function nym(pi: ExtensionAPI) {
 		// Keep suggestion fresh for /nym<tab>. Throttle for named
 		// sessions (every 5 turns) since it's less urgent.
 		const shouldUpdate = !pi.getSessionName() || turnCount % 5 === 0;
-		if (ctx.hasUI && shouldUpdate) {
+		if (activeUI && shouldUpdate) {
 			void updateSuggestedName(ctx);
 		}
 	});
