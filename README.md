@@ -12,6 +12,7 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 | `feed-timestamps.ts` | Add right-aligned `yyyy-mm-dd hh:mm:ss` feed timestamps via upstream-compatible monkey patches |
 | `compaction-model.ts` | Use a cheaper model for context compaction |
 | `codex-fast.ts` | Toggle OpenAI Codex Fast mode via `/fast` |
+| `anycopy-shortcut.ts` | Open `pi-anycopy` with `Ctrl+Shift+T` |
 | `fork-rename.ts` | Auto-rename forked sessions |
 | `post-compact-reminder.ts` | Remind after compaction events |
 | `protect-paths.ts` | Guard `.git` paths, block dangerous delete flows, and add macOS `move_to_trash` |
