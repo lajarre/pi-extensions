@@ -187,7 +187,12 @@ export function applyFastServiceTier(
 	const eligibility = getFastEligibility(ctx);
 	if (!eligibility.ok) return undefined;
 	if (!isPayloadObject(payload)) return undefined;
-	if ("service_tier" in payload) return undefined;
+	if (
+		payload.service_tier !== undefined &&
+		payload.service_tier !== null
+	) {
+		return undefined;
+	}
 	if (!isCodexResponsesRequestPayload(payload, ctx.model?.id)) {
 		return undefined;
 	}

@@ -325,6 +325,25 @@ describe("applyFastServiceTier", () => {
 		assert.equal(result, undefined);
 	});
 
+	it("treats nullish service_tier values as unset", () => {
+		for (const serviceTier of [undefined, null]) {
+			const result = applyFastServiceTier(
+				createCodexPayload({ service_tier: serviceTier }),
+				{
+					model: eligibleModel,
+					modelRegistry: {
+						oauth: true,
+						isUsingOAuth() {
+							return this.oauth;
+						},
+					},
+				},
+			);
+
+			assert.equal(result?.service_tier, "priority");
+		}
+	});
+
 	it("skips payloads that do not match the active model", () => {
 		const result = applyFastServiceTier(
 			createCodexPayload({ model: "gpt-5.4" }),
