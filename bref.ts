@@ -589,6 +589,18 @@ function cycleMode(ctx: ExtensionContext): void {
 	ctx.ui.notify(`bref: ${getMode()}`, "info");
 }
 
+function toggleBref(ctx: ExtensionContext): void {
+	setMode(
+		getMode() === "condensed"
+			? ctx.ui.getToolsExpanded()
+				? "detail"
+				: "regular"
+			: "condensed",
+	);
+	applyMode(ctx);
+	ctx.ui.notify(`bref: ${getMode()}`, "info");
+}
+
 function normalizeCommandArg(arg: string): string {
 	return singleLine(
 		arg.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "),
@@ -611,20 +623,19 @@ function setModeFromCommand(arg: string): BrefMode | undefined {
 export default async function bref(pi: ExtensionAPI) {
 	await installPatches();
 
+	pi.registerShortcut("ctrl+shift+b", {
+		description: "Toggle bref display mode",
+		handler: async (ctx) => {
+			toggleBref(ctx);
+		},
+	});
+
 	pi.registerCommand("bref", {
 		description: "Toggle or set bref display mode",
 		handler: async (args, ctx) => {
 			const normalized = normalizeCommandArg(args);
 			if (!normalized) {
-				setMode(
-					getMode() === "condensed"
-						? ctx.ui.getToolsExpanded()
-							? "detail"
-							: "regular"
-						: "condensed",
-				);
-				applyMode(ctx);
-				ctx.ui.notify(`bref: ${getMode()}`, "info");
+				toggleBref(ctx);
 				return;
 			}
 
