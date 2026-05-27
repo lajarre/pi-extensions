@@ -57,6 +57,19 @@ type PickerResult = {
 	saveDefaults: boolean;
 };
 
+type ThemeColor =
+	| "accent"
+	| "bashMode"
+	| "customMessageLabel"
+	| "mdHeading"
+	| "syntaxComment"
+	| "syntaxKeyword"
+	| "syntaxString"
+	| "syntaxType"
+	| "syntaxVariable"
+	| "thinkingText"
+	| "warning";
+
 type ThemeModule = {
 	theme: {
 		fg(color: string, text: string): string;
@@ -92,6 +105,18 @@ const DEFAULT_EXPANDED_LANES: BrefLane[] = [
 	"assistant",
 	"custom",
 ];
+const CONDENSED_ROW_COLORS: Record<BrefLane, ThemeColor> = {
+	user: "accent",
+	assistant: "mdHeading",
+	thinking: "thinkingText",
+	subagent: "customMessageLabel",
+	tool: "syntaxKeyword",
+	bash: "bashMode",
+	skill: "syntaxString",
+	custom: "syntaxType",
+	branch: "syntaxVariable",
+	compaction: "warning",
+};
 
 const VALID_LANES = new Set<BrefLane>(ALL_LANES);
 const SESSION_TOOL_NAMES = new Set([
@@ -621,13 +646,30 @@ function renderBullet(
 	width: number,
 	label: string,
 	detail?: string,
+	color: ThemeColor = "syntaxComment",
 ): string[] {
-	let line = theme.fg("syntaxComment", "↳");
-	line += theme.fg("dim", label);
+	let line = theme.fg(color, "↳");
+	line += theme.fg(color, label);
 	if (detail) {
 		line += theme.fg("syntaxComment", ` — ${detail}`);
 	}
 	return [truncateToWidth(line, width)];
+}
+
+function renderLaneBullet(
+	theme: ThemeModule["theme"],
+	width: number,
+	lane: BrefLane,
+	label: string,
+	detail?: string,
+): string[] {
+	return renderBullet(
+		theme,
+		width,
+		label,
+		detail,
+		CONDENSED_ROW_COLORS[lane],
+	);
 }
 
 function renderReplyLine(
@@ -862,7 +904,7 @@ async function installPatches(): Promise<void> {
 	const userRender = UserMessageComponent.prototype.render;
 	UserMessageComponent.prototype.render = function (width: number) {
 		if (isBrefEnabled() && !isExpandedLane("user")) {
-			return renderBullet(theme, width, "user prompt");
+			return renderLaneBullet(theme, width, "user", "user prompt");
 		}
 		return userRender.call(this, width);
 	};
@@ -900,9 +942,10 @@ async function installPatches(): Promise<void> {
 					if (!expandAssistant) {
 						if (!insertedReplyLine) {
 							lines.push(
-								...renderBullet(
+								...renderLaneBullet(
 									theme,
 									width,
+									"assistant",
 									"response",
 									clip(singleLine(text), 72),
 								),
@@ -940,7 +983,12 @@ async function installPatches(): Promise<void> {
 					lines.push(...container.render(width));
 				} else {
 					lines.push(
-						...renderBullet(theme, width, theme.italic("thinking")),
+						...renderLaneBullet(
+							theme,
+							width,
+							"thinking",
+							theme.italic("thinking"),
+						),
 					);
 				}
 			}
@@ -955,9 +1003,10 @@ async function installPatches(): Promise<void> {
 						? message.errorMessage
 						: "Operation aborted";
 				lines.push(
-					...renderBullet(
+					...renderLaneBullet(
 						theme,
 						width,
+						"assistant",
 						theme.fg("error", errorMessage),
 					),
 				);
@@ -968,9 +1017,10 @@ async function installPatches(): Promise<void> {
 						? message.errorMessage.trim()
 						: "Unknown error";
 				lines.push(
-					...renderBullet(
+					...renderLaneBullet(
 						theme,
 						width,
+						"assistant",
 						theme.fg("error", `Error: ${errorMessage}`),
 					),
 				);
@@ -1000,7 +1050,7 @@ async function installPatches(): Promise<void> {
 			this.result,
 			Boolean(this.isPartial),
 		);
-		return renderBullet(theme, width, label, detail);
+		return renderLaneBullet(theme, width, lane, label, detail);
 	};
 
 	const bashRender = BashExecutionComponent.prototype.render;
@@ -1026,9 +1076,10 @@ async function installPatches(): Promise<void> {
 			detail = count > 0 ? `${count} lines` : "ok";
 		}
 
-		return renderBullet(
+		return renderLaneBullet(
 			theme,
 			width,
+			"bash",
 			clip(`bash ${singleLine(this.command ?? "")}`, 80),
 			detail,
 		);
@@ -1045,7 +1096,7 @@ async function installPatches(): Promise<void> {
 		const label = summary
 			? `[${message.customType}] ${summary}`
 			: `[${message.customType}]`;
-		return renderBullet(theme, width, clip(label, 80));
+		return renderLaneBullet(theme, width, "custom", clip(label, 80));
 	};
 
 	const skillRender = SkillInvocationMessageComponent.prototype.render;
@@ -1055,9 +1106,10 @@ async function installPatches(): Promise<void> {
 		if (!isBrefEnabled() || isExpandedLane("skill")) {
 			return skillRender.call(this, width);
 		}
-		return renderBullet(
+		return renderLaneBullet(
 			theme,
 			width,
+			"skill",
 			clip(`skill ${this.skillBlock?.name ?? ""}`, 80),
 		);
 	};
@@ -1069,7 +1121,7 @@ async function installPatches(): Promise<void> {
 		if (!isBrefEnabled() || isExpandedLane("branch")) {
 			return branchRender.call(this, width);
 		}
-		return renderBullet(theme, width, "branch summary");
+		return renderLaneBullet(theme, width, "branch", "branch summary");
 	};
 
 	const compactionRender =
@@ -1083,9 +1135,10 @@ async function installPatches(): Promise<void> {
 		const tokenStr = Number(
 			this.message?.tokensBefore ?? 0,
 		).toLocaleString();
-		return renderBullet(
+		return renderLaneBullet(
 			theme,
 			width,
+			"compaction",
 			`compacted from ${tokenStr} tokens`,
 		);
 	};
