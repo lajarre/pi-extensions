@@ -27,11 +27,13 @@ type BrefLane =
 	| "compaction";
 
 type BrefConfig = {
+	expandedLanes?: unknown;
 	visibleLanes?: unknown;
 };
 
 type BrefSessionConfig = {
 	mode?: unknown;
+	expandedLanes?: unknown;
 	visibleLanes?: unknown;
 };
 
@@ -44,13 +46,13 @@ type ToolLikeResult = {
 type PatchState = {
 	mode: BrefMode;
 	patched: boolean;
-	visibleLanes: Set<BrefLane>;
-	defaultVisibleLanes: Set<BrefLane>;
+	expandedLanes: Set<BrefLane>;
+	defaultExpandedLanes: Set<BrefLane>;
 	defaultsLoaded: boolean;
 };
 
 type PickerResult = {
-	visibleLanes: BrefLane[];
+	expandedLanes: BrefLane[];
 	saveDefaults: boolean;
 };
 
@@ -72,16 +74,31 @@ const LANE_DEFINITIONS: Array<{ lane: BrefLane; label: string }> = [
 	{ lane: "tool", label: "tool calls" },
 	{ lane: "bash", label: "bash" },
 	{ lane: "skill", label: "skills" },
-	{ lane: "custom", label: "custom/session meta" },
+	{ lane: "custom", label: "session/meta" },
 	{ lane: "branch", label: "branch summaries" },
 	{ lane: "compaction", label: "compaction summaries" },
 ];
 
-const DEFAULT_VISIBLE_LANES: BrefLane[] = LANE_DEFINITIONS.map(
+const ALL_LANES: BrefLane[] = LANE_DEFINITIONS.map(
 	(definition) => definition.lane,
 );
+const DEFAULT_EXPANDED_LANES: BrefLane[] = [
+	"user",
+	"assistant",
+	"custom",
+];
 
-const VALID_LANES = new Set<BrefLane>(DEFAULT_VISIBLE_LANES);
+const VALID_LANES = new Set<BrefLane>(ALL_LANES);
+const SESSION_TOOL_NAMES = new Set([
+	"send_to_session",
+	"list_sessions",
+	"session_lineage",
+	"session_ask",
+	"session_search",
+	"session_query",
+	"fork_pi",
+	"spawn_pi",
+]);
 
 declare global {
 	// eslint-disable-next-line no-var
@@ -93,14 +110,20 @@ if (!state) {
 	state = {
 		mode: "regular",
 		patched: false,
-		visibleLanes: new Set(DEFAULT_VISIBLE_LANES),
-		defaultVisibleLanes: new Set(DEFAULT_VISIBLE_LANES),
+		expandedLanes: new Set(DEFAULT_EXPANDED_LANES),
+		defaultExpandedLanes: new Set(DEFAULT_EXPANDED_LANES),
 		defaultsLoaded: false,
 	};
 	globalThis.__piBrefState__ = state;
 }
-state.visibleLanes ??= new Set(DEFAULT_VISIBLE_LANES);
-state.defaultVisibleLanes ??= new Set(DEFAULT_VISIBLE_LANES);
+const legacyState = state as PatchState & {
+	visibleLanes?: Set<BrefLane>;
+	defaultVisibleLanes?: Set<BrefLane>;
+};
+state.expandedLanes ??=
+	legacyState.visibleLanes ?? new Set(DEFAULT_EXPANDED_LANES);
+state.defaultExpandedLanes ??=
+	legacyState.defaultVisibleLanes ?? new Set(DEFAULT_EXPANDED_LANES);
 state.defaultsLoaded ??= false;
 
 const pkgEntry = fileURLToPath(
@@ -138,8 +161,12 @@ function isBrefEnabled(): boolean {
 	return getMode() === "condensed";
 }
 
-function isVisibleLane(lane: BrefLane): boolean {
-	return state.visibleLanes.has(lane);
+function isExpandedLane(lane: BrefLane): boolean {
+	return state.expandedLanes.has(lane);
+}
+
+function laneForTool(toolName: string): BrefLane {
+	return SESSION_TOOL_NAMES.has(toolName) ? "custom" : "tool";
 }
 
 function isBrefMode(value: unknown): value is BrefMode {
@@ -165,7 +192,23 @@ function normalizeLanes(value: unknown): Set<BrefLane> | undefined {
 }
 
 function orderedLanes(lanes: Set<BrefLane>): BrefLane[] {
-	return DEFAULT_VISIBLE_LANES.filter((lane) => lanes.has(lane));
+	return ALL_LANES.filter((lane) => lanes.has(lane));
+}
+
+function storedExpandedLanes(
+	config: BrefConfig | BrefSessionConfig,
+): Set<BrefLane> | undefined {
+	const hasExpandedLanes = Array.isArray(config.expandedLanes);
+	const lanes = normalizeLanes(
+		hasExpandedLanes ? config.expandedLanes : config.visibleLanes,
+	);
+	if (!lanes) return undefined;
+
+	if (!hasExpandedLanes && lanes.size === ALL_LANES.length) {
+		return new Set(DEFAULT_EXPANDED_LANES);
+	}
+
+	return lanes;
 }
 
 async function loadDefaultConfig(): Promise<void> {
@@ -173,9 +216,9 @@ async function loadDefaultConfig(): Promise<void> {
 	try {
 		const text = await fs.readFile(defaultConfigPath, "utf8");
 		const config = JSON.parse(text) as BrefConfig;
-		const lanes = normalizeLanes(config.visibleLanes);
+		const lanes = storedExpandedLanes(config);
 		if (lanes) {
-			state.defaultVisibleLanes = lanes;
+			state.defaultExpandedLanes = lanes;
 		}
 	} catch {
 		// Keep startup quiet. Invalid/missing defaults fall back to built-ins.
@@ -185,23 +228,23 @@ async function loadDefaultConfig(): Promise<void> {
 }
 
 async function saveDefaultConfig(
-	lanes = state.visibleLanes,
+	lanes = state.expandedLanes,
 ): Promise<void> {
-	const visibleLanes = orderedLanes(lanes);
+	const expandedLanes = orderedLanes(lanes);
 	await fs.mkdir(path.dirname(defaultConfigPath), { recursive: true });
 	await fs.writeFile(
 		defaultConfigPath,
-		`${JSON.stringify({ visibleLanes }, null, "\t")}\n`,
+		`${JSON.stringify({ expandedLanes }, null, "\t")}\n`,
 		"utf8",
 	);
-	state.defaultVisibleLanes = new Set(visibleLanes);
+	state.defaultExpandedLanes = new Set(expandedLanes);
 	state.defaultsLoaded = true;
 }
 
 function persistSessionState(pi: ExtensionAPI): void {
 	pi.appendEntry<BrefSessionConfig>(sessionConfigType, {
 		mode: getMode(),
-		visibleLanes: orderedLanes(state.visibleLanes),
+		expandedLanes: orderedLanes(state.expandedLanes),
 	});
 }
 
@@ -222,14 +265,14 @@ async function restoreState(ctx: ExtensionContext): Promise<void> {
 		state.mode = isBrefMode(savedConfig.mode)
 			? savedConfig.mode
 			: "regular";
-		state.visibleLanes =
-			normalizeLanes(savedConfig.visibleLanes) ??
-			new Set(state.defaultVisibleLanes);
+		state.expandedLanes =
+			storedExpandedLanes(savedConfig) ??
+			new Set(state.defaultExpandedLanes);
 		return;
 	}
 
 	state.mode = "regular";
-	state.visibleLanes = new Set(state.defaultVisibleLanes);
+	state.expandedLanes = new Set(state.defaultExpandedLanes);
 }
 
 function shortenHome(value: string): string {
@@ -487,7 +530,7 @@ function renderReplyLine(
 
 class BrefPicker {
 	private selectedIndex = 0;
-	private visibleLanes: Set<BrefLane>;
+	private expandedLanes: Set<BrefLane>;
 	private status = "";
 	private statusTone: "success" | "error" = "success";
 	private saving = false;
@@ -503,7 +546,7 @@ class BrefPicker {
 		) => Promise<void>,
 		private readonly requestRender: () => void,
 	) {
-		this.visibleLanes = new Set(lanes);
+		this.expandedLanes = new Set(lanes);
 	}
 
 	invalidate(): void {}
@@ -544,7 +587,7 @@ class BrefPicker {
 
 		if (matchesKey(data, Key.enter)) {
 			this.done({
-				visibleLanes: orderedLanes(this.visibleLanes),
+				expandedLanes: orderedLanes(this.expandedLanes),
 				saveDefaults: false,
 			});
 		}
@@ -553,14 +596,14 @@ class BrefPicker {
 	render(width: number): string[] {
 		const title = this.theme.fg(
 			"accent",
-			this.theme.bold?.("bref message lanes") ?? "bref message lanes",
+			this.theme.bold?.("bref full lanes") ?? "bref full lanes",
 		);
 		const lines = [title, ""];
 
 		for (let index = 0; index < LANE_DEFINITIONS.length; index++) {
 			const definition = LANE_DEFINITIONS[index];
 			const selected = index === this.selectedIndex;
-			const checked = this.visibleLanes.has(definition.lane);
+			const checked = this.expandedLanes.has(definition.lane);
 			const cursor = selected ? this.theme.fg("accent", "›") : " ";
 			const checkbox = checked
 				? this.theme.fg("success", "✓")
@@ -575,7 +618,7 @@ class BrefPicker {
 		lines.push(
 			this.theme.fg(
 				"dim",
-				"space toggle · j/k move · enter apply · ctrl-enter save+apply · ctrl-s save · esc cancel",
+				"space full/compact · j/k move · enter apply · ctrl-enter save+apply · ctrl-s save · esc cancel",
 			),
 		);
 		if (this.status) {
@@ -595,10 +638,10 @@ class BrefPicker {
 	private toggleSelected(): void {
 		const lane = LANE_DEFINITIONS[this.selectedIndex]?.lane;
 		if (!lane) return;
-		if (this.visibleLanes.has(lane)) {
-			this.visibleLanes.delete(lane);
+		if (this.expandedLanes.has(lane)) {
+			this.expandedLanes.delete(lane);
 		} else {
-			this.visibleLanes.add(lane);
+			this.expandedLanes.add(lane);
 		}
 		this.status = "";
 		this.statusTone = "success";
@@ -612,7 +655,7 @@ class BrefPicker {
 		this.statusTone = "success";
 		this.requestRender();
 		try {
-			await this.onSaveDefaults(this.visibleLanes);
+			await this.onSaveDefaults(this.expandedLanes);
 			this.status = "saved defaults";
 			this.statusTone = "success";
 		} catch {
@@ -631,9 +674,9 @@ class BrefPicker {
 		this.statusTone = "success";
 		this.requestRender();
 		try {
-			await this.onSaveDefaults(this.visibleLanes);
+			await this.onSaveDefaults(this.expandedLanes);
 			this.done({
-				visibleLanes: orderedLanes(this.visibleLanes),
+				expandedLanes: orderedLanes(this.expandedLanes),
 				saveDefaults: false,
 			});
 		} catch {
@@ -707,23 +750,20 @@ async function installPatches(): Promise<void> {
 
 	const userRender = UserMessageComponent.prototype.render;
 	UserMessageComponent.prototype.render = function (width: number) {
-		if (!isBrefEnabled() || isVisibleLane("user")) {
-			return userRender.call(this, width);
+		if (isBrefEnabled() && !isExpandedLane("user")) {
+			return renderBullet(theme, width, "user prompt");
 		}
-		return [];
+		return userRender.call(this, width);
 	};
 
 	const assistantRender = AssistantMessageComponent.prototype.render;
 	AssistantMessageComponent.prototype.render = function (
 		width: number,
 	) {
-		if (!isBrefEnabled()) {
+		const expandAssistant = isExpandedLane("assistant");
+		const expandThinking = isExpandedLane("thinking");
+		if (!isBrefEnabled() || (expandAssistant && expandThinking)) {
 			return assistantRender.call(this, width);
-		}
-		const showAssistant = isVisibleLane("assistant");
-		const showThinking = isVisibleLane("thinking");
-		if (!showAssistant && !showThinking) {
-			return [];
 		}
 
 		const message = this.lastMessage;
@@ -741,12 +781,26 @@ async function installPatches(): Promise<void> {
 
 		for (const content of message.content ?? []) {
 			if (
-				showAssistant &&
 				content?.type === "text" &&
 				typeof content.text === "string"
 			) {
 				const text = content.text.trim();
 				if (text) {
+					if (!expandAssistant) {
+						if (!insertedReplyLine) {
+							lines.push(
+								...renderBullet(
+									theme,
+									width,
+									"response",
+									clip(singleLine(text), 72),
+								),
+							);
+							insertedReplyLine = true;
+						}
+						continue;
+					}
+
 					if (!insertedReplyLine) {
 						lines.push(...renderReplyLine(theme, width));
 						insertedReplyLine = true;
@@ -759,18 +813,28 @@ async function installPatches(): Promise<void> {
 			}
 
 			if (
-				showThinking &&
 				content?.type === "thinking" &&
 				typeof content.thinking === "string" &&
 				content.thinking.trim()
 			) {
-				lines.push(
-					...renderBullet(theme, width, theme.italic("thinking")),
-				);
+				if (expandThinking) {
+					container.clear();
+					container.addChild(
+						new Markdown(content.thinking.trim(), 1, 0, markdownTheme, {
+							color: (text: string) => theme.fg("thinkingText", text),
+							italic: true,
+						}),
+					);
+					lines.push(...container.render(width));
+				} else {
+					lines.push(
+						...renderBullet(theme, width, theme.italic("thinking")),
+					);
+				}
 			}
 		}
 
-		if (showAssistant && !hasToolCalls) {
+		if (!hasToolCalls) {
 			if (message.stopReason === "aborted") {
 				const errorMessage =
 					typeof message.errorMessage === "string" &&
@@ -806,21 +870,21 @@ async function installPatches(): Promise<void> {
 
 	const toolRender = ToolExecutionComponent.prototype.render;
 	ToolExecutionComponent.prototype.render = function (width: number) {
-		if (!isBrefEnabled()) {
+		const toolName =
+			typeof this.toolName === "string" ? this.toolName : "tool";
+		const lane = laneForTool(toolName);
+		if (!isBrefEnabled() || isExpandedLane(lane)) {
 			return toolRender.call(this, width);
-		}
-		if (!isVisibleLane("tool")) {
-			return [];
 		}
 
 		const label = summarizeToolCall(
-			typeof this.toolName === "string" ? this.toolName : "tool",
+			toolName,
 			(typeof this.args === "object" && this.args !== null
 				? this.args
 				: {}) as Record<string, unknown>,
 		);
 		const detail = summarizeToolResult(
-			typeof this.toolName === "string" ? this.toolName : "tool",
+			toolName,
 			this.result,
 			Boolean(this.isPartial),
 		);
@@ -829,11 +893,8 @@ async function installPatches(): Promise<void> {
 
 	const bashRender = BashExecutionComponent.prototype.render;
 	BashExecutionComponent.prototype.render = function (width: number) {
-		if (!isBrefEnabled()) {
+		if (!isBrefEnabled() || isExpandedLane("bash")) {
 			return bashRender.call(this, width);
-		}
-		if (!isVisibleLane("bash")) {
-			return [];
 		}
 
 		let detail: string | undefined;
@@ -863,18 +924,11 @@ async function installPatches(): Promise<void> {
 
 	const customRender = CustomMessageComponent.prototype.render;
 	CustomMessageComponent.prototype.render = function (width: number) {
-		if (!isBrefEnabled()) {
+		if (!isBrefEnabled() || isExpandedLane("custom")) {
 			return customRender.call(this, width);
-		}
-		if (!isVisibleLane("custom")) {
-			return [];
 		}
 
 		const message = this.message;
-		if (message?.customType === "session-message") {
-			return customRender.call(this, width);
-		}
-
 		const summary = firstTextLine(message?.content);
 		const label = summary
 			? `[${message.customType}] ${summary}`
@@ -886,11 +940,8 @@ async function installPatches(): Promise<void> {
 	SkillInvocationMessageComponent.prototype.render = function (
 		width: number,
 	) {
-		if (!isBrefEnabled()) {
+		if (!isBrefEnabled() || isExpandedLane("skill")) {
 			return skillRender.call(this, width);
-		}
-		if (!isVisibleLane("skill")) {
-			return [];
 		}
 		return renderBullet(
 			theme,
@@ -903,11 +954,8 @@ async function installPatches(): Promise<void> {
 	BranchSummaryMessageComponent.prototype.render = function (
 		width: number,
 	) {
-		if (!isBrefEnabled()) {
+		if (!isBrefEnabled() || isExpandedLane("branch")) {
 			return branchRender.call(this, width);
-		}
-		if (!isVisibleLane("branch")) {
-			return [];
 		}
 		return renderBullet(theme, width, "branch summary");
 	};
@@ -917,11 +965,8 @@ async function installPatches(): Promise<void> {
 	CompactionSummaryMessageComponent.prototype.render = function (
 		width: number,
 	) {
-		if (!isBrefEnabled()) {
+		if (!isBrefEnabled() || isExpandedLane("compaction")) {
 			return compactionRender.call(this, width);
-		}
-		if (!isVisibleLane("compaction")) {
-			return [];
 		}
 		const tokenStr = Number(
 			this.message?.tokensBefore ?? 0,
@@ -972,7 +1017,7 @@ async function openBrefPicker(
 	const result = await ctx.ui.custom<PickerResult | null>(
 		(tui, theme, _keybindings, done) =>
 			new BrefPicker(
-				state.visibleLanes,
+				state.expandedLanes,
 				theme,
 				done,
 				saveDefaultConfig,
@@ -991,9 +1036,9 @@ async function openBrefPicker(
 	);
 
 	if (!result) return;
-	state.visibleLanes = new Set(result.visibleLanes);
+	state.expandedLanes = new Set(result.expandedLanes);
 	if (result.saveDefaults) {
-		await saveDefaultConfig(state.visibleLanes);
+		await saveDefaultConfig(state.expandedLanes);
 	}
 	setMode("condensed");
 	applyMode(ctx);
