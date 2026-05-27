@@ -812,15 +812,16 @@ async function installPatches(): Promise<void> {
 				continue;
 			}
 
-			if (
-				content?.type === "thinking" &&
-				typeof content.thinking === "string" &&
-				content.thinking.trim()
-			) {
+			if (content?.type === "thinking") {
+				const thinking =
+					typeof content.thinking === "string"
+						? content.thinking.trim()
+						: "";
 				if (expandThinking) {
+					if (!thinking) continue;
 					container.clear();
 					container.addChild(
-						new Markdown(content.thinking.trim(), 1, 0, markdownTheme, {
+						new Markdown(thinking, 1, 0, markdownTheme, {
 							color: (text: string) => theme.fg("thinkingText", text),
 							italic: true,
 						}),
