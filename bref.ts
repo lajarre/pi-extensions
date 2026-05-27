@@ -19,6 +19,7 @@ type BrefLane =
 	| "user"
 	| "assistant"
 	| "thinking"
+	| "subagent"
 	| "tool"
 	| "bash"
 	| "skill"
@@ -71,6 +72,7 @@ const LANE_DEFINITIONS: Array<{ lane: BrefLane; label: string }> = [
 	{ lane: "user", label: "user prompts" },
 	{ lane: "assistant", label: "assistant replies" },
 	{ lane: "thinking", label: "thinking" },
+	{ lane: "subagent", label: "subagents" },
 	{ lane: "tool", label: "tool calls" },
 	{ lane: "bash", label: "bash" },
 	{ lane: "skill", label: "skills" },
@@ -81,6 +83,9 @@ const LANE_DEFINITIONS: Array<{ lane: BrefLane; label: string }> = [
 
 const ALL_LANES: BrefLane[] = LANE_DEFINITIONS.map(
 	(definition) => definition.lane,
+);
+const LEGACY_VISIBLE_LANES = ALL_LANES.filter(
+	(lane) => lane !== "subagent",
 );
 const DEFAULT_EXPANDED_LANES: BrefLane[] = [
 	"user",
@@ -166,6 +171,7 @@ function isExpandedLane(lane: BrefLane): boolean {
 }
 
 function laneForTool(toolName: string): BrefLane {
+	if (toolName === "subagent") return "subagent";
 	return SESSION_TOOL_NAMES.has(toolName) ? "custom" : "tool";
 }
 
@@ -204,7 +210,11 @@ function storedExpandedLanes(
 	);
 	if (!lanes) return undefined;
 
-	if (!hasExpandedLanes && lanes.size === ALL_LANES.length) {
+	const hasAllCurrentLanes = ALL_LANES.every((lane) => lanes.has(lane));
+	const hasAllLegacyLanes = LEGACY_VISIBLE_LANES.every((lane) =>
+		lanes.has(lane),
+	);
+	if (!hasExpandedLanes && (hasAllCurrentLanes || hasAllLegacyLanes)) {
 		return new Set(DEFAULT_EXPANDED_LANES);
 	}
 
@@ -434,6 +444,104 @@ function summarizeToolCall(
 	return toolName;
 }
 
+function compactNumber(value: number): string {
+	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+	return value.toLocaleString();
+}
+
+function compactDuration(ms: number): string {
+	if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
+	if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
+	return `${ms}ms`;
+}
+
+function summarizeSubagentResult(
+	result: ToolLikeResult,
+	firstLine: string | undefined,
+): string {
+	const details = result.details ?? {};
+	const mode =
+		typeof details.mode === "string" ? details.mode : undefined;
+	const runId =
+		typeof details.runId === "string" ? details.runId : undefined;
+	const asyncId =
+		typeof details.asyncId === "string" ? details.asyncId : undefined;
+	const id = runId ?? asyncId;
+	const results = Array.isArray(details.results) ? details.results : [];
+
+	if (results.length === 0) {
+		if (result.isError) {
+			return firstLine ? clip(`error: ${firstLine}`, 72) : "error";
+		}
+		if (mode === "management") {
+			return firstLine ? clip(firstLine, 60) : "ok";
+		}
+		return id ? `queued ${id}` : "done";
+	}
+
+	const agents = new Set<string>();
+	let failed = 0;
+	let running = 0;
+	let toolCount = 0;
+	let tokens = 0;
+	let durationMs = 0;
+
+	for (const item of results) {
+		if (typeof item !== "object" || item === null) continue;
+		const entry = item as Record<string, unknown>;
+		if (typeof entry.agent === "string") agents.add(entry.agent);
+
+		const progress =
+			typeof entry.progress === "object" && entry.progress !== null
+				? (entry.progress as Record<string, unknown>)
+				: undefined;
+		const progressStatus =
+			typeof progress?.status === "string"
+				? progress.status
+				: undefined;
+		if (progressStatus === "running") running++;
+		if (
+			progressStatus !== "running" &&
+			typeof entry.exitCode === "number" &&
+			entry.exitCode !== 0
+		) {
+			failed++;
+		}
+
+		const progressSummary =
+			typeof entry.progressSummary === "object" &&
+			entry.progressSummary !== null
+				? (entry.progressSummary as Record<string, unknown>)
+				: undefined;
+		const stats = progress ?? progressSummary;
+		if (typeof stats?.toolCount === "number") {
+			toolCount += stats.toolCount;
+		}
+		if (typeof stats?.tokens === "number") {
+			tokens += stats.tokens;
+		}
+		if (typeof stats?.durationMs === "number") {
+			durationMs += stats.durationMs;
+		}
+	}
+
+	const agentLabel =
+		agents.size === 1 ? [...agents][0] : `${results.length} agents`;
+	const parts = [agentLabel];
+	if (running > 0) {
+		parts.push(`${running} running`);
+	} else {
+		parts.push(failed > 0 ? `${failed} failed` : "ok");
+	}
+	if (toolCount > 0) parts.push(`${toolCount} tools`);
+	if (tokens > 0) parts.push(`${compactNumber(tokens)} tok`);
+	if (durationMs > 0) parts.push(compactDuration(durationMs));
+	if (id) parts.push(id);
+
+	return clip(parts.filter(Boolean).join(" · "), 72);
+}
+
 function summarizeToolResult(
 	toolName: string,
 	result: ToolLikeResult | undefined,
@@ -453,6 +561,10 @@ function summarizeToolResult(
 		? result.content.filter((item) => item?.type === "image").length
 		: 0;
 
+	if (toolName === "subagent") {
+		return summarizeSubagentResult(result, firstLine);
+	}
+
 	if (result.isError) {
 		if (firstLine) {
 			return clip(`error: ${firstLine}`, 72);
@@ -462,7 +574,6 @@ function summarizeToolResult(
 
 	if (toolName === "write") return "written";
 	if (toolName === "edit") return "edited";
-	if (toolName === "subagent") return "done";
 	if (toolName === "web_search") return "done";
 	if (toolName === "fetch_content")
 		return imageCount > 0 ? `${imageCount} images` : "done";
