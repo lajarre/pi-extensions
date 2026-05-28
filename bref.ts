@@ -160,13 +160,15 @@ const pkgEntry = fileURLToPath(
 	import.meta.resolve("@mariozechner/pi-coding-agent"),
 );
 const pkgRoot = path.dirname(path.dirname(pkgEntry));
-const defaultConfigPath = path.join(
-	os.homedir(),
-	".pi",
-	"agent",
-	"bref.json",
-);
+const agentDir =
+	process.env.PI_CODING_AGENT_DIR ??
+	path.join(os.homedir(), ".pi", "agent");
+const defaultConfigPath = path.join(agentDir, "bref.json");
+const keybindingsConfigPath = path.join(agentDir, "keybindings.json");
 const sessionConfigType = "bref-config";
+const brefShortcutKey = "bref.toggle";
+const legacyBrefShortcutKey = "extension.bref.toggle";
+const defaultBrefShortcuts = ["ctrl+shift+b"];
 
 function getMode(): BrefMode {
 	return state.mode;
@@ -244,6 +246,42 @@ function storedExpandedLanes(
 	}
 
 	return lanes;
+}
+
+function shortcutList(value: unknown): string[] | undefined {
+	if (typeof value === "string") return [value];
+	if (
+		Array.isArray(value) &&
+		value.every((entry) => typeof entry === "string")
+	) {
+		return value;
+	}
+	return undefined;
+}
+
+async function loadBrefShortcuts(): Promise<string[]> {
+	try {
+		const text = await fs.readFile(keybindingsConfigPath, "utf8");
+		const config = JSON.parse(text) as Record<string, unknown>;
+		const configured =
+			shortcutList(config[brefShortcutKey]) ??
+			shortcutList(config[legacyBrefShortcutKey]);
+		if (configured) {
+			return [
+				...new Set(configured.map((key) => key.trim()).filter(Boolean)),
+			];
+		}
+	} catch {
+		// Missing/invalid keybindings keep the built-in bref shortcut.
+	}
+	return [...defaultBrefShortcuts];
+}
+
+function matchesAnyShortcut(
+	data: string,
+	shortcuts: string[],
+): boolean {
+	return shortcuts.some((shortcut) => matchesKey(data, shortcut));
 }
 
 async function loadDefaultConfig(): Promise<void> {
@@ -697,6 +735,7 @@ class BrefPicker {
 		private readonly onSaveDefaults: (
 			lanes: Set<BrefLane>,
 		) => Promise<void>,
+		private readonly applyShortcutKeys: string[],
 		private readonly requestRender: () => void,
 	) {
 		this.expandedLanes = new Set(lanes);
@@ -707,6 +746,11 @@ class BrefPicker {
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.escape)) {
 			this.done(null);
+			return;
+		}
+
+		if (matchesAnyShortcut(data, this.applyShortcutKeys)) {
+			this.apply();
 			return;
 		}
 
@@ -739,10 +783,7 @@ class BrefPicker {
 		}
 
 		if (matchesKey(data, Key.enter)) {
-			this.done({
-				expandedLanes: orderedLanes(this.expandedLanes),
-				saveDefaults: false,
-			});
+			this.apply();
 		}
 	}
 
@@ -799,6 +840,13 @@ class BrefPicker {
 		this.status = "";
 		this.statusTone = "success";
 		this.requestRender();
+	}
+
+	private apply(): void {
+		this.done({
+			expandedLanes: orderedLanes(this.expandedLanes),
+			saveDefaults: false,
+		});
 	}
 
 	private async saveDefaults(): Promise<void> {
@@ -1171,6 +1219,7 @@ function disableBref(pi: ExtensionAPI, ctx: ExtensionContext): void {
 async function openBrefPicker(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
+	brefShortcuts: string[],
 ): Promise<void> {
 	await loadDefaultConfig();
 	if (!ctx.hasUI) {
@@ -1186,6 +1235,7 @@ async function openBrefPicker(
 				theme,
 				done,
 				saveDefaultConfig,
+				brefShortcuts,
 				() => tui.requestRender(),
 			),
 		{
@@ -1213,12 +1263,13 @@ async function openBrefPicker(
 async function toggleBref(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
+	brefShortcuts: string[],
 ): Promise<void> {
 	if (isBrefEnabled()) {
 		disableBref(pi, ctx);
 		return;
 	}
-	await openBrefPicker(pi, ctx);
+	await openBrefPicker(pi, ctx, brefShortcuts);
 }
 
 function normalizeCommandArg(arg: string): string {
@@ -1242,25 +1293,28 @@ function setModeFromCommand(arg: string): BrefMode | undefined {
 
 export default async function bref(pi: ExtensionAPI) {
 	await installPatches();
+	const brefShortcuts = await loadBrefShortcuts();
 
-	pi.registerShortcut("ctrl+shift+b", {
-		description: "Toggle bref display mode",
-		handler: async (ctx) => {
-			await toggleBref(pi, ctx);
-		},
-	});
+	for (const shortcut of brefShortcuts) {
+		pi.registerShortcut(shortcut, {
+			description: `Toggle bref display mode (${brefShortcutKey})`,
+			handler: async (ctx) => {
+				await toggleBref(pi, ctx, brefShortcuts);
+			},
+		});
+	}
 
 	pi.registerCommand("bref", {
 		description: "Open bref picker or set display mode",
 		handler: async (args, ctx) => {
 			const normalized = normalizeCommandArg(args);
 			if (!normalized) {
-				await toggleBref(pi, ctx);
+				await toggleBref(pi, ctx, brefShortcuts);
 				return;
 			}
 
 			if (normalized === "picker") {
-				await openBrefPicker(pi, ctx);
+				await openBrefPicker(pi, ctx, brefShortcuts);
 				return;
 			}
 
