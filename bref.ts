@@ -110,7 +110,7 @@ const CONDENSED_ROW_COLORS: Record<BrefLane, ThemeColor> = {
 	assistant: "mdHeading",
 	thinking: "thinkingText",
 	subagent: "customMessageLabel",
-	tool: "syntaxKeyword",
+	tool: "syntaxComment",
 	bash: "bashMode",
 	skill: "syntaxString",
 	custom: "syntaxType",
