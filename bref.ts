@@ -20,6 +20,7 @@ type BrefLane =
 	| "assistant"
 	| "thinking"
 	| "subagent"
+	| "todo"
 	| "tool"
 	| "bash"
 	| "skill"
@@ -62,8 +63,11 @@ type ThemeColor =
 	| "bashMode"
 	| "customMessageLabel"
 	| "mdHeading"
+	| "dim"
+	| "muted"
 	| "syntaxComment"
 	| "syntaxKeyword"
+	| "syntaxNumber"
 	| "syntaxString"
 	| "syntaxType"
 	| "syntaxVariable"
@@ -86,6 +90,7 @@ const LANE_DEFINITIONS: Array<{ lane: BrefLane; label: string }> = [
 	{ lane: "assistant", label: "assistant replies" },
 	{ lane: "thinking", label: "thinking" },
 	{ lane: "subagent", label: "subagents" },
+	{ lane: "todo", label: "todos" },
 	{ lane: "tool", label: "tool calls" },
 	{ lane: "bash", label: "bash" },
 	{ lane: "skill", label: "skills" },
@@ -98,7 +103,7 @@ const ALL_LANES: BrefLane[] = LANE_DEFINITIONS.map(
 	(definition) => definition.lane,
 );
 const LEGACY_VISIBLE_LANES = ALL_LANES.filter(
-	(lane) => lane !== "subagent",
+	(lane) => lane !== "subagent" && lane !== "todo",
 );
 const DEFAULT_EXPANDED_LANES: BrefLane[] = [
 	"user",
@@ -108,14 +113,15 @@ const DEFAULT_EXPANDED_LANES: BrefLane[] = [
 const CONDENSED_ROW_COLORS: Record<BrefLane, ThemeColor> = {
 	user: "accent",
 	assistant: "mdHeading",
-	thinking: "thinkingText",
+	thinking: "dim",
 	subagent: "customMessageLabel",
-	tool: "syntaxComment",
+	todo: "syntaxNumber",
+	tool: "syntaxType",
 	bash: "bashMode",
-	skill: "syntaxString",
-	custom: "syntaxType",
-	branch: "syntaxVariable",
-	compaction: "warning",
+	skill: "syntaxComment",
+	custom: "accent",
+	branch: "muted",
+	compaction: "muted",
 };
 
 const VALID_LANES = new Set<BrefLane>(ALL_LANES);
@@ -199,6 +205,7 @@ function isExpandedLane(lane: BrefLane): boolean {
 
 function laneForTool(toolName: string): BrefLane {
 	if (toolName === "subagent") return "subagent";
+	if (toolName === "todo") return "todo";
 	return SESSION_TOOL_NAMES.has(toolName) ? "custom" : "tool";
 }
 
