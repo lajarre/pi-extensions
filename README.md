@@ -19,6 +19,7 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 | `github-write-approval/` | Gate public GitHub CLI writes from `bash` tool calls |
 | `move-session.ts` | Move a session to another directory and relaunch pi there |
 | `copy-session-id.ts` | Copy current session ID via `/sid` or `F8` |
+| `session-recap.ts` | Claude-Code-style focus/idle recap, forked from [tmustier/pi-extensions/session-recap](https://github.com/tmustier/pi-extensions/tree/main/session-recap) |
 | `spawn-worker.ts` | Tmux worker spawn + session-control orchestration |
 | `todos.ts` | Todo management extension |
 
