@@ -3,6 +3,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
+const OSC133_ZONE_END = "\x1b]133;B\x07";
+const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+const OSC133_ZONE_END_FINAL = `${OSC133_ZONE_END}${OSC133_ZONE_FINAL}`;
 const ANSI_RE =
 	/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\x1b\\))/g;
 const USER_TIMESTAMP_PROPERTY = "__piFeedTimestamp__";
@@ -113,6 +116,66 @@ function renderRightAlignedTimestamp(
 	return theme && bgColor ? theme.bg(bgColor, line) : line;
 }
 
+function renderUserTopBorder(
+	width: number,
+	timestamp: string | undefined,
+	theme: ThemeModule["theme"],
+): string {
+	if (width <= 0) return "";
+	const label = " user ";
+	const rawTimestamp = timestamp
+		? timestamp.length > width
+			? timestamp.slice(-width)
+			: timestamp
+		: "";
+	const timestampText = rawTimestamp ? ` ${rawTimestamp}` : "";
+	const fixedWidth = label.length + timestampText.length;
+	if (fixedWidth >= width) {
+		return theme.fg("borderAccent", "─".repeat(width));
+	}
+
+	const fillWidth = width - fixedWidth;
+	const leftFillWidth = Math.min(2, fillWidth);
+	const rightFillWidth = fillWidth - leftFillWidth;
+	return (
+		theme.fg("borderAccent", "─".repeat(leftFillWidth)) +
+		theme.fg("accent", label) +
+		theme.fg("borderAccent", "─".repeat(rightFillWidth)) +
+		(rawTimestamp ? theme.fg("dim", timestampText) : "")
+	);
+}
+
+function renderUserBottomBorder(
+	width: number,
+	theme: ThemeModule["theme"],
+): string {
+	return theme.fg("borderAccent", "─".repeat(Math.max(0, width)));
+}
+
+function replaceUserMessageBorders(
+	lines: string[],
+	width: number,
+	timestamp: string | undefined,
+	theme: ThemeModule["theme"],
+): string[] {
+	if (lines.length < 2) return lines;
+
+	const startPrefix = lines[0]?.startsWith(OSC133_ZONE_START)
+		? OSC133_ZONE_START
+		: "";
+	const endPrefix = lines[lines.length - 1]?.startsWith(
+		OSC133_ZONE_END_FINAL,
+	)
+		? OSC133_ZONE_END_FINAL
+		: "";
+
+	const next = [...lines];
+	next[0] = `${startPrefix}${renderUserTopBorder(width, timestamp, theme)}`;
+	next[next.length - 1] =
+		`${endPrefix}${renderUserBottomBorder(width, theme)}`;
+	return next;
+}
+
 function replaceTopPaddingLine(
 	lines: string[],
 	width: number,
@@ -186,11 +249,7 @@ async function installPatches(): Promise<void> {
 	UserMessageComponent.prototype.render = function (width: number) {
 		const lines = userRender.call(this, width);
 		const timestamp = getUserTimestamp(this);
-		return timestamp
-			? replaceTopPaddingLine(lines, width, timestamp, theme, {
-					bgColor: "userMessageBg",
-				})
-			: lines;
+		return replaceUserMessageBorders(lines, width, timestamp, theme);
 	};
 
 	const assistantRender = AssistantMessageComponent.prototype.render;
