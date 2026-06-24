@@ -122,26 +122,23 @@ function renderUserTopBorder(
 	theme: ThemeModule["theme"],
 ): string {
 	if (width <= 0) return "";
-	const label = " user ";
 	const rawTimestamp = timestamp
 		? timestamp.length > width
 			? timestamp.slice(-width)
 			: timestamp
 		: "";
 	const timestampText = rawTimestamp ? ` ${rawTimestamp}` : "";
-	const fixedWidth = label.length + timestampText.length;
-	if (fixedWidth >= width) {
-		return theme.fg("borderAccent", "─".repeat(width));
+	if (timestampText.length >= width) {
+		return theme.bg(
+			"userMessageBg",
+			theme.fg("dim", timestampText.slice(-width)),
+		);
 	}
 
-	const fillWidth = width - fixedWidth;
-	const leftFillWidth = Math.min(2, fillWidth);
-	const rightFillWidth = fillWidth - leftFillWidth;
-	return (
-		theme.fg("borderAccent", "─".repeat(leftFillWidth)) +
-		theme.fg("accent", label) +
-		theme.fg("borderAccent", "─".repeat(rightFillWidth)) +
-		(rawTimestamp ? theme.fg("dim", timestampText) : "")
+	return theme.bg(
+		"userMessageBg",
+		theme.fg("borderAccent", "─".repeat(width - timestampText.length)) +
+			(rawTimestamp ? theme.fg("dim", timestampText) : ""),
 	);
 }
 
@@ -149,7 +146,10 @@ function renderUserBottomBorder(
 	width: number,
 	theme: ThemeModule["theme"],
 ): string {
-	return theme.fg("borderAccent", "─".repeat(Math.max(0, width)));
+	return theme.bg(
+		"userMessageBg",
+		theme.fg("borderAccent", "─".repeat(Math.max(0, width))),
+	);
 }
 
 function replaceUserMessageBorders(

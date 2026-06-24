@@ -739,20 +739,6 @@ function renderLaneBullet(
 	);
 }
 
-function renderReplyLine(
-	theme: ThemeModule["theme"],
-	width: number,
-): string[] {
-	return [
-		renderBackgroundRow(
-			theme,
-			width,
-			theme.fg("syntaxComment", "response"),
-			"toolPendingBg",
-		),
-	];
-}
-
 class BrefPicker {
 	private selectedIndex = 0;
 	private expandedLanes: Set<BrefLane>;
@@ -1037,10 +1023,6 @@ async function installPatches(): Promise<void> {
 						continue;
 					}
 
-					if (!insertedReplyLine) {
-						lines.push(...renderReplyLine(theme, width));
-						insertedReplyLine = true;
-					}
 					container.clear();
 					container.addChild(new Markdown(text, 1, 0, markdownTheme));
 					lines.push(...container.render(width));
@@ -1065,12 +1047,7 @@ async function installPatches(): Promise<void> {
 					lines.push(...container.render(width));
 				} else {
 					lines.push(
-						...renderLaneBullet(
-							theme,
-							width,
-							"thinking",
-							theme.italic("thinking"),
-						),
+						...renderLaneBullet(theme, width, "thinking", "thinking"),
 					);
 				}
 			}
