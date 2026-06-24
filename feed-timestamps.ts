@@ -8,7 +8,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const OSC133_ZONE_END_FINAL = `${OSC133_ZONE_END}${OSC133_ZONE_FINAL}`;
 const ANSI_RE =
 	/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\x1b\\))/g;
-const USER_TIMESTAMP_PROPERTY = "__piFeedTimestamp__";
+const COMPONENT_TIMESTAMP_PROPERTY = "__piFeedTimestamp__";
 
 type ThemeModule = {
 	theme: {
@@ -26,6 +26,19 @@ type UserMessageComponentLike = {
 	prototype: {
 		render(width: number): string[];
 		timestamp?: string | null;
+	};
+};
+
+type TimestampedRenderableComponentClass = {
+	prototype: {
+		render(width: number): string[];
+	};
+};
+
+type ToolExecutionComponentLike = {
+	prototype: {
+		render(width: number): string[];
+		toolCallId?: string;
 	};
 };
 
@@ -50,12 +63,13 @@ type InteractiveModeLike = {
 
 type TimestampedUserMessage = {
 	timestamp?: string | null;
-	[USER_TIMESTAMP_PROPERTY]?: string;
+	[COMPONENT_TIMESTAMP_PROPERTY]?: string;
 };
 
 type PatchState = {
 	patched: boolean;
 	pkgRoot?: string;
+	toolTimestamps: Map<string, string>;
 };
 
 declare global {
@@ -67,9 +81,11 @@ let state = globalThis.__piFeedTimestampsState__;
 if (!state) {
 	state = {
 		patched: false,
+		toolTimestamps: new Map(),
 	};
 	globalThis.__piFeedTimestampsState__ = state;
 }
+state.toolTimestamps ??= new Map();
 
 function getPkgRoot(): string {
 	if (state.pkgRoot) return state.pkgRoot;
@@ -85,11 +101,14 @@ function pad2(value: number): string {
 	return String(value).padStart(2, "0");
 }
 
-function formatTimestamp(timestamp?: number): string | undefined {
-	if (timestamp === undefined || !Number.isFinite(timestamp))
-		return undefined;
+function formatTimestamp(
+	timestamp?: number | string,
+): string | undefined {
+	const value =
+		typeof timestamp === "string" ? Date.parse(timestamp) : timestamp;
+	if (value === undefined || !Number.isFinite(value)) return undefined;
 
-	const date = new Date(timestamp);
+	const date = new Date(value);
 	return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
 		date.getDate(),
 	)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(
@@ -99,6 +118,10 @@ function formatTimestamp(timestamp?: number): string | undefined {
 
 function stripAnsi(value: string): string {
 	return value.replace(ANSI_RE, "");
+}
+
+function isBrefSyntheticLine(line: string): boolean {
+	return stripAnsi(line).trimStart().startsWith("↳");
 }
 
 function renderRightAlignedTimestamp(
@@ -176,26 +199,39 @@ function replaceUserMessageBorders(
 	return next;
 }
 
-function replaceTopPaddingLine(
+function addTimestampToBlock(
 	lines: string[],
 	width: number,
-	timestamp: string,
-	theme?: ThemeModule["theme"],
-	options?: TimestampRenderOptions,
+	timestamp: string | undefined,
+	theme: ThemeModule["theme"],
 ): string[] {
-	if (lines.length === 0) return lines;
+	if (!timestamp || lines.length === 0) return lines;
 
-	const prefix = lines[0]?.startsWith(OSC133_ZONE_START)
+	const targetIndex = lines.findIndex(
+		(line) => !isBrefSyntheticLine(line),
+	);
+	if (targetIndex < 0) return lines;
+
+	const line = lines[targetIndex] ?? "";
+	const prefix = line.startsWith(OSC133_ZONE_START)
 		? OSC133_ZONE_START
 		: "";
-	lines[0] = `${prefix}${renderRightAlignedTimestamp(width, timestamp, theme, options)}`;
-	return lines;
+	const timestampLine = `${prefix}${renderRightAlignedTimestamp(width, timestamp, theme)}`;
+	const visible = stripAnsi(line).trim();
+	const next = [...lines];
+	if (visible === "") {
+		next[targetIndex] = timestampLine;
+		return next;
+	}
+
+	next.splice(targetIndex, 0, timestampLine);
+	return next;
 }
 
 function getUserTimestamp(
 	component: TimestampedUserMessage,
 ): string | undefined {
-	const patched = component[USER_TIMESTAMP_PROPERTY];
+	const patched = component[COMPONENT_TIMESTAMP_PROPERTY];
 	if (typeof patched === "string" && patched) return patched;
 
 	if (typeof component.timestamp === "string" && component.timestamp) {
@@ -206,8 +242,75 @@ function getUserTimestamp(
 }
 
 function setUserTimestamp(component: unknown, timestamp: string): void {
-	(component as Record<string, unknown>)[USER_TIMESTAMP_PROPERTY] =
+	(component as Record<string, unknown>)[COMPONENT_TIMESTAMP_PROPERTY] =
 		timestamp;
+}
+
+function getComponentTimestamp(component: unknown): string | undefined {
+	const timestamp = (component as Record<string, unknown>)[
+		COMPONENT_TIMESTAMP_PROPERTY
+	];
+	return typeof timestamp === "string" && timestamp
+		? timestamp
+		: undefined;
+}
+
+function setComponentTimestamp(
+	component: unknown,
+	timestamp: string | undefined,
+): void {
+	if (!timestamp) return;
+	(component as Record<string, unknown>)[COMPONENT_TIMESTAMP_PROPERTY] =
+		timestamp;
+}
+
+function messageTimestamp(message: unknown): string | undefined {
+	const timestamp = (
+		message as { timestamp?: number | string } | undefined
+	)?.timestamp;
+	return formatTimestamp(timestamp);
+}
+
+function indexToolTimestampsFromMessage(message: unknown): void {
+	const candidate = message as
+		| {
+				role?: string;
+				content?: Array<{ type?: string; id?: string }>;
+				timestamp?: number | string;
+		  }
+		| undefined;
+	if (candidate?.role !== "assistant") return;
+	const timestamp = messageTimestamp(candidate);
+	if (!timestamp) return;
+
+	for (const content of candidate.content ?? []) {
+		if (
+			content?.type === "toolCall" &&
+			typeof content.id === "string"
+		) {
+			state.toolTimestamps.set(content.id, timestamp);
+		}
+	}
+}
+
+function indexToolTimestampsFromEntries(entries: unknown[]): void {
+	state.toolTimestamps.clear();
+	for (const entry of entries) {
+		const message = (entry as { message?: unknown }).message;
+		indexToolTimestampsFromMessage(message);
+	}
+}
+
+function patchTimestampRender(
+	componentClass: TimestampedRenderableComponentClass,
+	timestampFor: (component: unknown) => string | undefined,
+	theme: ThemeModule["theme"],
+): void {
+	const render = componentClass.prototype.render;
+	componentClass.prototype.render = function (width: number) {
+		const lines = render.call(this, width);
+		return addTimestampToBlock(lines, width, timestampFor(this), theme);
+	};
 }
 
 async function importInternal<T = unknown>(
@@ -225,6 +328,12 @@ async function installPatches(): Promise<void> {
 	const [
 		userModule,
 		assistantModule,
+		toolModule,
+		bashModule,
+		customModule,
+		skillModule,
+		branchModule,
+		compactionModule,
 		interactiveModeModule,
 		themeModule,
 	] = await Promise.all([
@@ -235,6 +344,24 @@ async function installPatches(): Promise<void> {
 			AssistantMessageComponent: AssistantMessageComponentLike;
 		}>("modes/interactive/components/assistant-message.js"),
 		importInternal<{
+			ToolExecutionComponent: ToolExecutionComponentLike;
+		}>("modes/interactive/components/tool-execution.js"),
+		importInternal<{
+			BashExecutionComponent: TimestampedRenderableComponentClass;
+		}>("modes/interactive/components/bash-execution.js"),
+		importInternal<{
+			CustomMessageComponent: TimestampedRenderableComponentClass;
+		}>("modes/interactive/components/custom-message.js"),
+		importInternal<{
+			SkillInvocationMessageComponent: TimestampedRenderableComponentClass;
+		}>("modes/interactive/components/skill-invocation-message.js"),
+		importInternal<{
+			BranchSummaryMessageComponent: TimestampedRenderableComponentClass;
+		}>("modes/interactive/components/branch-summary-message.js"),
+		importInternal<{
+			CompactionSummaryMessageComponent: TimestampedRenderableComponentClass;
+		}>("modes/interactive/components/compaction-summary-message.js"),
+		importInternal<{
 			InteractiveMode: InteractiveModeLike;
 		}>("modes/interactive/interactive-mode.js"),
 		importInternal<ThemeModule>("modes/interactive/theme/theme.js"),
@@ -242,6 +369,12 @@ async function installPatches(): Promise<void> {
 
 	const { UserMessageComponent } = userModule;
 	const { AssistantMessageComponent } = assistantModule;
+	const { ToolExecutionComponent } = toolModule;
+	const { BashExecutionComponent } = bashModule;
+	const { CustomMessageComponent } = customModule;
+	const { SkillInvocationMessageComponent } = skillModule;
+	const { BranchSummaryMessageComponent } = branchModule;
+	const { CompactionSummaryMessageComponent } = compactionModule;
 	const { InteractiveMode } = interactiveModeModule;
 	const { theme } = themeModule;
 
@@ -258,31 +391,70 @@ async function installPatches(): Promise<void> {
 	) {
 		const lines = assistantRender.call(this, width);
 		const timestamp = formatTimestamp(this.lastMessage?.timestamp);
-		return timestamp
-			? replaceTopPaddingLine(lines, width, timestamp, theme)
-			: lines;
+		return addTimestampToBlock(lines, width, timestamp, theme);
 	};
+
+	patchTimestampRender(
+		ToolExecutionComponent,
+		(component) => {
+			const toolCallId = (component as { toolCallId?: unknown })
+				.toolCallId;
+			return typeof toolCallId === "string"
+				? state.toolTimestamps.get(toolCallId)
+				: undefined;
+		},
+		theme,
+	);
+	patchTimestampRender(
+		BashExecutionComponent,
+		getComponentTimestamp,
+		theme,
+	);
+	patchTimestampRender(
+		CustomMessageComponent,
+		(component) =>
+			getComponentTimestamp(component) ??
+			messageTimestamp((component as { message?: unknown }).message),
+		theme,
+	);
+	patchTimestampRender(
+		SkillInvocationMessageComponent,
+		getComponentTimestamp,
+		theme,
+	);
+	patchTimestampRender(
+		BranchSummaryMessageComponent,
+		(component) =>
+			messageTimestamp((component as { message?: unknown }).message),
+		theme,
+	);
+	patchTimestampRender(
+		CompactionSummaryMessageComponent,
+		(component) =>
+			messageTimestamp((component as { message?: unknown }).message),
+		theme,
+	);
 
 	const addMessageToChat = InteractiveMode.prototype.addMessageToChat;
 	InteractiveMode.prototype.addMessageToChat = function (
-		message: { role?: string; timestamp?: number },
+		message: { role?: string; timestamp?: number | string },
 		options?: { populateHistory?: boolean },
 	) {
+		indexToolTimestampsFromMessage(message);
 		const before = Array.isArray(this.chatContainer?.children)
 			? this.chatContainer.children.length
 			: 0;
 
 		addMessageToChat.call(this, message, options);
 
-		if (message?.role !== "user") return;
-
-		const timestamp = formatTimestamp(message.timestamp);
+		const timestamp = messageTimestamp(message);
 		if (!timestamp) return;
 
 		const children = this.chatContainer?.children;
 		if (!Array.isArray(children)) return;
 
 		for (let i = before; i < children.length; i++) {
+			setComponentTimestamp(children[i], timestamp);
 			if (children[i] instanceof UserMessageComponent) {
 				setUserTimestamp(children[i], timestamp);
 			}
@@ -292,6 +464,22 @@ async function installPatches(): Promise<void> {
 	state.patched = true;
 }
 
-export default async function feedTimestamps(_pi: ExtensionAPI) {
+export default async function feedTimestamps(pi: ExtensionAPI) {
 	await installPatches();
+
+	pi.on("session_start", async (_event, ctx) => {
+		indexToolTimestampsFromEntries(ctx.sessionManager.getBranch());
+	});
+
+	pi.on("session_tree", async (_event, ctx) => {
+		indexToolTimestampsFromEntries(ctx.sessionManager.getBranch());
+	});
+
+	pi.on("message_update", async (event) => {
+		indexToolTimestampsFromMessage(event.message);
+	});
+
+	pi.on("message_end", async (event) => {
+		indexToolTimestampsFromMessage(event.message);
+	});
 }
