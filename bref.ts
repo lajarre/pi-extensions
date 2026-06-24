@@ -12,6 +12,7 @@ import {
 	Markdown,
 	matchesKey,
 	truncateToWidth,
+	visibleWidth,
 } from "@mariozechner/pi-tui";
 
 type BrefMode = "regular" | "detail" | "condensed";
@@ -74,8 +75,11 @@ type ThemeColor =
 	| "thinkingText"
 	| "warning";
 
+type ThemeBackgroundColor = "toolPendingBg";
+
 type ThemeModule = {
 	theme: {
+		bg(color: string, text: string): string;
 		fg(color: string, text: string): string;
 		italic(text: string): string;
 	};
@@ -135,6 +139,9 @@ const SESSION_TOOL_NAMES = new Set([
 	"fork_pi",
 	"spawn_pi",
 ]);
+
+const FULL_RESET_RE = /\x1b\[0m/g;
+const RESET_PRESERVING_BACKGROUND = "\x1b[22m\x1b[23m\x1b[24m\x1b[39m";
 
 declare global {
 	// eslint-disable-next-line no-var
@@ -692,13 +699,28 @@ function renderBullet(
 	label: string,
 	detail?: string,
 	color: ThemeColor = "syntaxComment",
+	background: ThemeBackgroundColor = "toolPendingBg",
 ): string[] {
 	let line = theme.fg(color, "↳");
 	line += theme.fg(color, label);
 	if (detail) {
 		line += theme.fg("syntaxComment", ` — ${detail}`);
 	}
-	return [truncateToWidth(line, width)];
+	return [renderBackgroundRow(theme, width, line, background)];
+}
+
+function renderBackgroundRow(
+	theme: ThemeModule["theme"],
+	width: number,
+	line: string,
+	background: ThemeBackgroundColor,
+): string {
+	const truncated = truncateToWidth(line, width).replace(
+		FULL_RESET_RE,
+		RESET_PRESERVING_BACKGROUND,
+	);
+	const padding = Math.max(0, width - visibleWidth(truncated));
+	return theme.bg(background, `${truncated}${" ".repeat(padding)}`);
 }
 
 function renderLaneBullet(
@@ -722,7 +744,12 @@ function renderReplyLine(
 	width: number,
 ): string[] {
 	return [
-		truncateToWidth(theme.fg("syntaxComment", "response"), width),
+		renderBackgroundRow(
+			theme,
+			width,
+			theme.fg("syntaxComment", "response"),
+			"toolPendingBg",
+		),
 	];
 }
 
