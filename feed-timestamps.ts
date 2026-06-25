@@ -22,6 +22,7 @@ type ThemeModule = {
 
 type RuledTimestampLineOptions = {
 	rule: string;
+	corner?: string;
 	timestamp?: string;
 	marker?: string;
 	ruleColor: string;
@@ -155,6 +156,20 @@ function isBorderOnlyLine(line: string): boolean {
 	return /^[─━-]+$/.test(stripAnsi(line).trim());
 }
 
+function renderRuleSegment(
+	width: number,
+	rule: string,
+	corner?: string,
+): string {
+	if (width <= 0) return "";
+	if (!corner) return rule.repeat(width);
+	const cornerWidth = visibleWidth(corner);
+	if (cornerWidth <= 0 || cornerWidth > width) {
+		return rule.repeat(width);
+	}
+	return `${corner}${rule.repeat(width - cornerWidth)}`;
+}
+
 function renderRuledTimestampLine(
 	width: number,
 	theme: ThemeModule["theme"],
@@ -184,12 +199,22 @@ function renderRuledTimestampLine(
 	);
 	const leftFillWidth = markerText ? Math.min(1, fillWidth) : 0;
 	const rightFillWidth = fillWidth - leftFillWidth;
+	const leftRule = renderRuleSegment(
+		leftFillWidth,
+		options.rule,
+		options.corner,
+	);
+	const rightRule = renderRuleSegment(
+		rightFillWidth,
+		options.rule,
+		leftFillWidth === 0 ? options.corner : undefined,
+	);
 	return (
-		theme.fg(options.ruleColor, options.rule.repeat(leftFillWidth)) +
+		theme.fg(options.ruleColor, leftRule) +
 		(markerText
 			? theme.fg(options.markerColor ?? "accent", markerText)
 			: "") +
-		theme.fg(options.ruleColor, options.rule.repeat(rightFillWidth)) +
+		theme.fg(options.ruleColor, rightRule) +
 		(timestampText
 			? theme.fg(options.timestampColor ?? "dim", timestampText)
 			: "")
@@ -205,6 +230,7 @@ function renderDashedTimestampLine(
 ): string {
 	return renderRuledTimestampLine(width, theme, {
 		rule: dash,
+		corner: "╭",
 		timestamp,
 		marker,
 		ruleColor: "borderMuted",
@@ -254,6 +280,7 @@ function renderUserTopBorder(
 		"userMessageBg",
 		renderRuledTimestampLine(width, theme, {
 			rule: "╌",
+			corner: "╭",
 			timestamp: rawTimestamp,
 			marker: "💬",
 			ruleColor: "borderAccent",
