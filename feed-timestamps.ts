@@ -300,9 +300,13 @@ function addTimestampToBlock(
 	width: number,
 	timestamp: string | undefined,
 	theme: ThemeModule["theme"],
-	options: { marker?: string } = {},
+	options: { marker?: string; trimBlankAfterTimestamp?: boolean } = {},
 ): string[] {
 	if (!timestamp || lines.length === 0) return lines;
+	const finalize = (next: string[], timestampIndex: number) =>
+		options.trimBlankAfterTimestamp
+			? removeBlankLinesAfter(next, timestampIndex)
+			: next;
 
 	const candidateIndexes = lines.flatMap((line, index) =>
 		isBrefSyntheticLine(line) ? [] : [index],
@@ -332,7 +336,7 @@ function addTimestampToBlock(
 		if (rendered) {
 			const next = [...lines];
 			next[backgroundBlankIndex] = `${prefix}${rendered}`;
-			return next;
+			return finalize(next, backgroundBlankIndex);
 		}
 	}
 
@@ -351,7 +355,7 @@ function addTimestampToBlock(
 			dash,
 			options.marker,
 		)}`;
-		return next;
+		return finalize(next, borderIndex);
 	}
 
 	const blankIndex = leadingChromeIndexes.find((index) =>
@@ -368,7 +372,7 @@ function addTimestampToBlock(
 			"╌",
 			options.marker,
 		)}`;
-		return next;
+		return finalize(next, blankIndex);
 	}
 
 	const targetIndex = candidateIndexes[0] ?? 0;
@@ -383,6 +387,22 @@ function addTimestampToBlock(
 	)}`;
 	const next = [...lines];
 	next.splice(targetIndex, 0, timestampLine);
+	return finalize(next, targetIndex);
+}
+
+function removeBlankLinesAfter(
+	lines: string[],
+	timestampIndex: number,
+): string[] {
+	const next = [...lines];
+	const index = timestampIndex + 1;
+	while (
+		index < next.length - 1 &&
+		isBlankLine(next[index] ?? "") &&
+		!next[index]?.startsWith(OSC133_ZONE_END_FINAL)
+	) {
+		next.splice(index, 1);
+	}
 	return next;
 }
 
@@ -551,6 +571,7 @@ async function installPatches(): Promise<void> {
 		const timestamp = formatTimestamp(this.lastMessage?.timestamp);
 		return addTimestampToBlock(lines, width, timestamp, theme, {
 			marker: "🤖",
+			trimBlankAfterTimestamp: true,
 		});
 	};
 
