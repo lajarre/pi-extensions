@@ -8,6 +8,8 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const OSC133_ZONE_END_FINAL = `${OSC133_ZONE_END}${OSC133_ZONE_FINAL}`;
 const ANSI_RE =
 	/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\x1b\\))/g;
+const BACKGROUND_ANSI_RE = /\x1b\[(?:48;[25];[0-9;]*|4[0-7]|10[0-7])m/;
+const BACKGROUND_RESET = "\x1b[49m";
 const COMPONENT_TIMESTAMP_PROPERTY = "__piFeedTimestamp__";
 
 type ThemeModule = {
@@ -15,11 +17,6 @@ type ThemeModule = {
 		fg(color: string, text: string): string;
 		bg(color: string, text: string): string;
 	};
-};
-
-type TimestampRenderOptions = {
-	fgColor?: string;
-	bgColor?: string;
 };
 
 type UserMessageComponentLike = {
@@ -124,19 +121,66 @@ function isBrefSyntheticLine(line: string): boolean {
 	return stripAnsi(line).trimStart().startsWith("↳");
 }
 
-function renderRightAlignedTimestamp(
+function splitZoneStart(line: string): {
+	prefix: string;
+	content: string;
+} {
+	return line.startsWith(OSC133_ZONE_START)
+		? {
+				prefix: OSC133_ZONE_START,
+				content: line.slice(OSC133_ZONE_START.length),
+			}
+		: { prefix: "", content: line };
+}
+
+function isBlankLine(line: string): boolean {
+	return stripAnsi(line).trim() === "";
+}
+
+function isBackgroundLine(line: string): boolean {
+	return BACKGROUND_ANSI_RE.test(line);
+}
+
+function isBorderOnlyLine(line: string): boolean {
+	return /^[─━-]+$/.test(stripAnsi(line).trim());
+}
+
+function renderDashedTimestampLine(
 	width: number,
 	timestamp: string,
-	theme?: ThemeModule["theme"],
-	options: TimestampRenderOptions = {},
+	theme: ThemeModule["theme"],
+	dash = "┄",
 ): string {
-	const { fgColor = "dim", bgColor } = options;
+	if (width <= 0) return "";
 	const text =
-		timestamp.length > width ? timestamp.slice(-width) : timestamp;
-	const rendered = theme ? theme.fg(fgColor, text) : text;
-	const spacing = Math.max(0, width - stripAnsi(rendered).length);
-	const line = `${" ".repeat(spacing)}${rendered}`;
-	return theme && bgColor ? theme.bg(bgColor, line) : line;
+		timestamp.length >= width
+			? timestamp.slice(-width)
+			: ` ${timestamp}`;
+	if (text.length >= width) return theme.fg("dim", text.slice(-width));
+	return (
+		theme.fg("borderMuted", dash.repeat(width - text.length)) +
+		theme.fg("dim", text)
+	);
+}
+
+function renderTimestampInBackgroundLine(
+	line: string,
+	width: number,
+	timestamp: string,
+	theme: ThemeModule["theme"],
+): string | undefined {
+	const bg = line.match(BACKGROUND_ANSI_RE)?.[0];
+	if (!bg) return undefined;
+
+	const text =
+		timestamp.length >= width
+			? timestamp.slice(-width)
+			: ` ${timestamp}`;
+	const content =
+		text.length >= width
+			? theme.fg("dim", text.slice(-width))
+			: `${" ".repeat(width - text.length)}${theme.fg("dim", text)}`;
+	return `${bg}${content}${BACKGROUND_RESET}`;
 }
 
 function renderUserTopBorder(
@@ -207,23 +251,72 @@ function addTimestampToBlock(
 ): string[] {
 	if (!timestamp || lines.length === 0) return lines;
 
-	const targetIndex = lines.findIndex(
-		(line) => !isBrefSyntheticLine(line),
+	const candidateIndexes = lines.flatMap((line, index) =>
+		isBrefSyntheticLine(line) ? [] : [index],
 	);
-	if (targetIndex < 0) return lines;
+	if (candidateIndexes.length === 0) return lines;
 
-	const line = lines[targetIndex] ?? "";
-	const prefix = line.startsWith(OSC133_ZONE_START)
-		? OSC133_ZONE_START
-		: "";
-	const timestampLine = `${prefix}${renderRightAlignedTimestamp(width, timestamp, theme)}`;
-	const visible = stripAnsi(line).trim();
-	const next = [...lines];
-	if (visible === "") {
-		next[targetIndex] = timestampLine;
+	const backgroundBlankIndex = candidateIndexes.find((index) => {
+		const line = lines[index] ?? "";
+		return isBlankLine(line) && isBackgroundLine(line);
+	});
+	if (backgroundBlankIndex !== undefined) {
+		const line = lines[backgroundBlankIndex] ?? "";
+		const { prefix, content } = splitZoneStart(line);
+		const rendered = renderTimestampInBackgroundLine(
+			content,
+			width,
+			timestamp,
+			theme,
+		);
+		if (rendered) {
+			const next = [...lines];
+			next[backgroundBlankIndex] = `${prefix}${rendered}`;
+			return next;
+		}
+	}
+
+	const borderIndex = candidateIndexes.find((index) =>
+		isBorderOnlyLine(lines[index] ?? ""),
+	);
+	if (borderIndex !== undefined) {
+		const line = lines[borderIndex] ?? "";
+		const { prefix, content } = splitZoneStart(line);
+		const dash = stripAnsi(content).trim().at(0) ?? "┄";
+		const next = [...lines];
+		next[borderIndex] = `${prefix}${renderDashedTimestampLine(
+			width,
+			timestamp,
+			theme,
+			dash,
+		)}`;
 		return next;
 	}
 
+	const blankIndex = candidateIndexes.find((index) =>
+		isBlankLine(lines[index] ?? ""),
+	);
+	if (blankIndex !== undefined) {
+		const line = lines[blankIndex] ?? "";
+		const { prefix } = splitZoneStart(line);
+		const next = [...lines];
+		next[blankIndex] = `${prefix}${renderDashedTimestampLine(
+			width,
+			timestamp,
+			theme,
+		)}`;
+		return next;
+	}
+
+	const targetIndex = candidateIndexes[0] ?? 0;
+	const line = lines[targetIndex] ?? "";
+	const { prefix } = splitZoneStart(line);
+	const timestampLine = `${prefix}${renderDashedTimestampLine(
+		width,
+		timestamp,
+		theme,
+	)}`;
+	const next = [...lines];
 	next.splice(targetIndex, 0, timestampLine);
 	return next;
 }
