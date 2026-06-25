@@ -143,6 +143,18 @@ function splitZoneStart(line: string): {
 		: { prefix: "", content: line };
 }
 
+function splitZoneEndFinal(line: string): {
+	prefix: string;
+	content: string;
+} {
+	return line.startsWith(OSC133_ZONE_END_FINAL)
+		? {
+				prefix: OSC133_ZONE_END_FINAL,
+				content: line.slice(OSC133_ZONE_END_FINAL.length),
+			}
+		: { prefix: "", content: line };
+}
+
 function isBlankLine(line: string): boolean {
 	return stripAnsi(line).trim() === "";
 }
@@ -206,6 +218,19 @@ function renderDashedTimestampLine(
 	return renderRuledTimestampLine(width, theme, {
 		rule: dash,
 		timestamp,
+		marker,
+		ruleColor: "borderMuted",
+	});
+}
+
+function renderDashedRuleLine(
+	width: number,
+	theme: ThemeModule["theme"],
+	dash = "╌",
+	marker?: string,
+): string {
+	return renderRuledTimestampLine(width, theme, {
+		rule: dash,
 		marker,
 		ruleColor: "borderMuted",
 	});
@@ -300,13 +325,27 @@ function addTimestampToBlock(
 	width: number,
 	timestamp: string | undefined,
 	theme: ThemeModule["theme"],
-	options: { marker?: string; trimBlankAfterTimestamp?: boolean } = {},
+	options: {
+		marker?: string;
+		trimBlankAfterTimestamp?: boolean;
+		trailingRuleMarker?: string;
+	} = {},
 ): string[] {
 	if (!timestamp || lines.length === 0) return lines;
-	const finalize = (next: string[], timestampIndex: number) =>
-		options.trimBlankAfterTimestamp
+	const finalize = (next: string[], timestampIndex: number) => {
+		let finalized = options.trimBlankAfterTimestamp
 			? removeBlankLinesAfter(next, timestampIndex)
 			: next;
+		if (options.trailingRuleMarker) {
+			finalized = addTrailingRuleLine(
+				finalized,
+				width,
+				theme,
+				options.trailingRuleMarker,
+			);
+		}
+		return finalized;
+	};
 
 	const candidateIndexes = lines.flatMap((line, index) =>
 		isBrefSyntheticLine(line) ? [] : [index],
@@ -403,6 +442,30 @@ function removeBlankLinesAfter(
 	) {
 		next.splice(index, 1);
 	}
+	return next;
+}
+
+function addTrailingRuleLine(
+	lines: string[],
+	width: number,
+	theme: ThemeModule["theme"],
+	marker?: string,
+): string[] {
+	const next = [...lines];
+	let endPrefix = "";
+	while (next.length > 0) {
+		const lastIndex = next.length - 1;
+		const line = next[lastIndex] ?? "";
+		const { prefix, content } = splitZoneEndFinal(line);
+		if (prefix) endPrefix = prefix;
+		next[lastIndex] = content;
+		if (!isBlankLine(content)) break;
+		next.pop();
+	}
+
+	next.push(
+		`${endPrefix}${renderDashedRuleLine(width, theme, "╌", marker)}`,
+	);
 	return next;
 }
 
@@ -572,6 +635,7 @@ async function installPatches(): Promise<void> {
 		return addTimestampToBlock(lines, width, timestamp, theme, {
 			marker: "🤖",
 			trimBlankAfterTimestamp: true,
+			trailingRuleMarker: "🤖",
 		});
 	};
 
