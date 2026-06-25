@@ -102,6 +102,11 @@ type InteractiveModeLike = {
 	};
 };
 
+type HideableRenderable = {
+	render(width: number): string[];
+	[HIDE_IN_BREF_PROPERTY]?: boolean;
+};
+
 const LANE_DEFINITIONS: Array<{ lane: BrefLane; label: string }> = [
 	{ lane: "user", label: "user prompts" },
 	{ lane: "assistant", label: "assistant replies" },
@@ -158,6 +163,7 @@ const RESET_PRESERVING_BACKGROUND = "\x1b[22m\x1b[23m\x1b[24m\x1b[39m";
 const ANSI_RE =
 	/\x1b(?:\][^\u0007]*(?:\u0007|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
 const BACKGROUND_ANSI_RE = /\x1b\[(?:48;[25];[0-9;]*|4[0-7]|10[0-7])m/;
+const HIDE_IN_BREF_PROPERTY = "__piBrefHideWhenCondensed__";
 
 declare global {
 	// eslint-disable-next-line no-var
@@ -795,6 +801,39 @@ function removeNewTopLevelSpacers(
 	}
 }
 
+function isRenderable(
+	component: unknown,
+): component is HideableRenderable {
+	return (
+		typeof component === "object" &&
+		component !== null &&
+		"render" in component &&
+		typeof (component as { render?: unknown }).render === "function"
+	);
+}
+
+function hideInBref(component: unknown): void {
+	if (!isRenderable(component) || component[HIDE_IN_BREF_PROPERTY]) {
+		return;
+	}
+	const render = component.render;
+	component.render = function (width: number): string[] {
+		return isBrefEnabled() ? [] : render.call(this, width);
+	};
+	component[HIDE_IN_BREF_PROPERTY] = true;
+}
+
+function hideNewChildrenInBref(
+	container: { children?: unknown[] } | undefined,
+	startIndex: number,
+): void {
+	const children = container?.children;
+	if (!Array.isArray(children)) return;
+	for (let index = startIndex; index < children.length; index++) {
+		hideInBref(children[index]);
+	}
+}
+
 class BrefPicker {
 	private selectedIndex = 0;
 	private expandedLanes: Set<BrefLane>;
@@ -1280,8 +1319,11 @@ async function installPatches(): Promise<void> {
 	InteractiveMode.prototype.showNewVersionNotification = function (
 		newVersion: string,
 	) {
-		if (isBrefEnabled()) return;
+		const before = Array.isArray(this.chatContainer?.children)
+			? this.chatContainer.children.length
+			: 0;
 		showNewVersionNotification.call(this, newVersion);
+		hideNewChildrenInBref(this.chatContainer, before);
 	};
 
 	const showPackageUpdateNotification =
@@ -1289,8 +1331,11 @@ async function installPatches(): Promise<void> {
 	InteractiveMode.prototype.showPackageUpdateNotification = function (
 		packages: string[],
 	) {
-		if (isBrefEnabled()) return;
+		const before = Array.isArray(this.chatContainer?.children)
+			? this.chatContainer.children.length
+			: 0;
 		showPackageUpdateNotification.call(this, packages);
+		hideNewChildrenInBref(this.chatContainer, before);
 	};
 
 	state.patched = true;
