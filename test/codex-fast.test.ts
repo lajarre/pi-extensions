@@ -205,6 +205,17 @@ describe("loadAutoFastEnabled", () => {
 		assert.equal(loadAutoFastEnabled(project), true);
 	});
 
+	it("uses global Pi settings", () => {
+		setEnv("PI_CODEX_FAST", undefined);
+		const agentDir = useAgentDir();
+		writeFileSync(
+			path.join(agentDir, "settings.json"),
+			JSON.stringify({ codexFast: { enabled: true } }),
+		);
+
+		assert.equal(loadAutoFastEnabled(process.cwd()), true);
+	});
+
 	it("uses project legacy config before global settings", () => {
 		setEnv("PI_CODEX_FAST", undefined);
 		const agentDir = useAgentDir();
