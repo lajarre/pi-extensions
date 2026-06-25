@@ -8,7 +8,7 @@ const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const OSC133_ZONE_END_FINAL = `${OSC133_ZONE_END}${OSC133_ZONE_FINAL}`;
 const ANSI_RE =
-	/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\x1b\\))/g;
+	/\x1b(?:\][^\u0007]*(?:\u0007|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
 const BACKGROUND_ANSI_RE = /\x1b\[(?:48;[25];[0-9;]*|4[0-7]|10[0-7])m/;
 const BACKGROUND_RESET = "\x1b[49m";
 const COMPONENT_TIMESTAMP_PROPERTY = "__piFeedTimestamp__";
