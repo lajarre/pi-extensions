@@ -36,9 +36,7 @@ type FastContext = {
 
 type RequestPayload = Record<string, unknown>;
 
-type FastConfig = {
-	enabled?: unknown;
-};
+type JsonObject = Record<string, unknown>;
 
 export class CodexFastConfigError extends Error {
 	readonly code:
@@ -80,7 +78,7 @@ export function parseFastBoolean(
 	}
 }
 
-function readJsonConfig(path: string): FastConfig {
+function readJsonConfig(path: string, label: string): JsonObject {
 	if (!existsSync(path)) return {};
 
 	let raw: string;
@@ -89,7 +87,7 @@ function readJsonConfig(path: string): FastConfig {
 	} catch (error) {
 		throw new CodexFastConfigError(
 			"PI_CODEX_FAST_CONFIG_UNREADABLE",
-			`Cannot read Codex Fast config at ${path}: ${formatError(error)}`,
+			`Cannot read ${label} at ${path}: ${formatError(error)}`,
 		);
 	}
 
@@ -99,31 +97,21 @@ function readJsonConfig(path: string): FastConfig {
 	} catch (error) {
 		throw new CodexFastConfigError(
 			"PI_CODEX_FAST_CONFIG_INVALID",
-			`Invalid Codex Fast config JSON at ${path}: ${formatError(error)}`,
+			`Invalid ${label} JSON at ${path}: ${formatError(error)}`,
 		);
 	}
 
 	if (!isPlainObject(parsed)) {
 		throw new CodexFastConfigError(
 			"PI_CODEX_FAST_CONFIG_INVALID",
-			`Codex Fast config at ${path} must be a JSON object`,
-		);
-	}
-
-	if (
-		Object.hasOwn(parsed, "enabled") &&
-		typeof parsed.enabled !== "boolean"
-	) {
-		throw new CodexFastConfigError(
-			"PI_CODEX_FAST_CONFIG_INVALID",
-			`Codex Fast config at ${path} must set enabled to a boolean`,
+			`${label} at ${path} must be a JSON object`,
 		);
 	}
 
 	return parsed;
 }
 
-function isPlainObject(value: unknown): value is FastConfig {
+function isPlainObject(value: unknown): value is JsonObject {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -139,11 +127,14 @@ function getAgentDir(): string {
 	);
 }
 
-export function findProjectFastConfig(cwd: string): string | undefined {
+export function findProjectFastConfig(
+	cwd: string,
+	fileName = "openai-fast.json",
+): string | undefined {
 	let current = resolve(cwd);
 
 	while (true) {
-		const candidate = join(current, ".pi", "openai-fast.json");
+		const candidate = join(current, ".pi", fileName);
 		if (existsSync(candidate)) return candidate;
 
 		const parent = dirname(current);
@@ -152,28 +143,84 @@ export function findProjectFastConfig(cwd: string): string | undefined {
 	}
 }
 
-function booleanConfigValue(config: FastConfig): boolean | undefined {
+function booleanConfigValue(config: JsonObject): boolean | undefined {
 	return typeof config.enabled === "boolean"
 		? config.enabled
 		: undefined;
+}
+
+function readSidecarFastEnabled(path: string): boolean | undefined {
+	const config = readJsonConfig(path, "Codex Fast config");
+	if (
+		Object.hasOwn(config, "enabled") &&
+		typeof config.enabled !== "boolean"
+	) {
+		throw new CodexFastConfigError(
+			"PI_CODEX_FAST_CONFIG_INVALID",
+			`Codex Fast config at ${path} must set enabled to a boolean`,
+		);
+	}
+
+	return booleanConfigValue(config);
+}
+
+function readSettingsFastEnabled(path: string): boolean | undefined {
+	const settings = readJsonConfig(path, "Pi settings");
+	if (!Object.hasOwn(settings, "codexFast")) return undefined;
+
+	if (!isPlainObject(settings.codexFast)) {
+		throw new CodexFastConfigError(
+			"PI_CODEX_FAST_CONFIG_INVALID",
+			`Pi settings at ${path} must set codexFast to an object`,
+		);
+	}
+
+	const config = settings.codexFast;
+	if (
+		Object.hasOwn(config, "enabled") &&
+		typeof config.enabled !== "boolean"
+	) {
+		throw new CodexFastConfigError(
+			"PI_CODEX_FAST_CONFIG_INVALID",
+			`Pi settings at ${path} must set codexFast.enabled to a boolean`,
+		);
+	}
+
+	return booleanConfigValue(config);
 }
 
 export function loadAutoFastEnabled(cwd: string): boolean {
 	const envEnabled = readEnvFastEnabled();
 	if (envEnabled !== undefined) return envEnabled;
 
+	const projectSettingsPath = findProjectFastConfig(
+		cwd,
+		"settings.json",
+	);
+	if (projectSettingsPath) {
+		const projectSettingsEnabled = readSettingsFastEnabled(
+			projectSettingsPath,
+		);
+		if (projectSettingsEnabled !== undefined) {
+			return projectSettingsEnabled;
+		}
+	}
+
 	const projectConfigPath = findProjectFastConfig(cwd);
 	if (projectConfigPath) {
-		const projectEnabled = booleanConfigValue(
-			readJsonConfig(projectConfigPath),
-		);
+		const projectEnabled = readSidecarFastEnabled(projectConfigPath);
 		if (projectEnabled !== undefined) return projectEnabled;
 	}
 
-	const globalConfig = readJsonConfig(
+	const globalSettingsEnabled = readSettingsFastEnabled(
+		join(getAgentDir(), "settings.json"),
+	);
+	if (globalSettingsEnabled !== undefined) return globalSettingsEnabled;
+
+	const globalConfig = readSidecarFastEnabled(
 		join(getAgentDir(), "extensions", "openai-fast.json"),
 	);
-	return booleanConfigValue(globalConfig) ?? false;
+	return globalConfig ?? false;
 }
 
 function readEnvFastEnabled(): boolean | undefined {

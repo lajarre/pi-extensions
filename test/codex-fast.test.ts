@@ -155,6 +155,14 @@ function createHarness(
 	};
 }
 
+function useAgentDir(): string {
+	const root = mkdtempSync(path.join(tmpdir(), "pi-fast-"));
+	const agentDir = path.join(root, "agent");
+	mkdirSync(path.join(agentDir, "extensions"), { recursive: true });
+	setEnv("PI_CODING_AGENT_DIR", agentDir);
+	return agentDir;
+}
+
 describe("parseFastBoolean", () => {
 	it("accepts common on/off spellings", () => {
 		assert.equal(parseFastBoolean("1"), true);
@@ -176,24 +184,42 @@ describe("loadAutoFastEnabled", () => {
 		assert.equal(loadAutoFastEnabled(process.cwd()), false);
 	});
 
-	it("uses project config before global config", () => {
+	it("uses project settings before legacy project config", () => {
 		setEnv("PI_CODEX_FAST", undefined);
-		const root = mkdtempSync(path.join(tmpdir(), "pi-fast-"));
-		const agentDir = path.join(root, "agent");
-		const project = path.join(root, "project");
-		mkdirSync(path.join(agentDir, "extensions"), { recursive: true });
+		const agentDir = useAgentDir();
+		const project = path.join(agentDir, "..", "project");
 		mkdirSync(path.join(project, ".pi"), { recursive: true });
 		writeFileSync(
-			path.join(agentDir, "extensions", "openai-fast.json"),
-			JSON.stringify({ enabled: false }),
+			path.join(agentDir, "settings.json"),
+			JSON.stringify({ codexFast: { enabled: false } }),
+		);
+		writeFileSync(
+			path.join(project, ".pi", "settings.json"),
+			JSON.stringify({ codexFast: { enabled: true } }),
 		);
 		writeFileSync(
 			path.join(project, ".pi", "openai-fast.json"),
-			JSON.stringify({ enabled: true }),
+			JSON.stringify({ enabled: false }),
 		);
 
-		setEnv("PI_CODING_AGENT_DIR", agentDir);
 		assert.equal(loadAutoFastEnabled(project), true);
+	});
+
+	it("uses project legacy config before global settings", () => {
+		setEnv("PI_CODEX_FAST", undefined);
+		const agentDir = useAgentDir();
+		const project = path.join(agentDir, "..", "project");
+		mkdirSync(path.join(project, ".pi"), { recursive: true });
+		writeFileSync(
+			path.join(agentDir, "settings.json"),
+			JSON.stringify({ codexFast: { enabled: true } }),
+		);
+		writeFileSync(
+			path.join(project, ".pi", "openai-fast.json"),
+			JSON.stringify({ enabled: false }),
+		);
+
+		assert.equal(loadAutoFastEnabled(project), false);
 	});
 
 	it("fails loudly for invalid PI_CODEX_FAST values", () => {
@@ -215,6 +241,24 @@ describe("loadAutoFastEnabled", () => {
 		writeFileSync(
 			path.join(project, ".pi", "openai-fast.json"),
 			JSON.stringify({ enabled: "yes" }),
+		);
+
+		assert.throws(
+			() => loadAutoFastEnabled(project),
+			(error) =>
+				error instanceof CodexFastConfigError &&
+				error.code === "PI_CODEX_FAST_CONFIG_INVALID",
+		);
+	});
+
+	it("fails loudly for invalid Pi settings", () => {
+		setEnv("PI_CODEX_FAST", undefined);
+		const root = mkdtempSync(path.join(tmpdir(), "pi-fast-"));
+		const project = path.join(root, "project");
+		mkdirSync(path.join(project, ".pi"), { recursive: true });
+		writeFileSync(
+			path.join(project, ".pi", "settings.json"),
+			JSON.stringify({ codexFast: { enabled: "yes" } }),
 		);
 
 		assert.throws(
@@ -448,6 +492,7 @@ describe("applyFastServiceTier", () => {
 describe("/fast command", () => {
 	it("enables injection after /fast on", async () => {
 		setEnv("PI_CODEX_FAST", undefined);
+		useAgentDir();
 		const harness = createHarness();
 
 		assert.equal(

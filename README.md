@@ -35,10 +35,16 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 /fast status
 ```
 
-Auto mode is off by default. Enable it per process with `PI_CODEX_FAST=1`, globally with `~/.pi/agent/extensions/openai-fast.json`, or per project with `.pi/openai-fast.json`:
+Auto mode is off by default. Enable it per process with `PI_CODEX_FAST=1`,
+globally with `~/.pi/agent/settings.json`, or per project with
+`.pi/settings.json`:
 
 ```json
-{ "enabled": true }
+{ "codexFast": { "enabled": true } }
 ```
+
+For compatibility, the extension still reads legacy `openai-fast.json` files
+(`.pi/openai-fast.json` before global
+`~/.pi/agent/extensions/openai-fast.json`) when the Pi settings key is absent.
 
 The extension checks the active model's OAuth state and only rewrites payloads matching Pi's OpenAI Codex Responses request shape. Pi's `before_provider_request` hook currently exposes the provider payload but not the actual request model/provider, so exact provider-auth verification for every possible concurrent request would require an upstream hook change.
