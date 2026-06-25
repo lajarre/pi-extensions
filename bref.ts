@@ -155,6 +155,7 @@ const FULL_RESET_RE = /\x1b\[0m/g;
 const RESET_PRESERVING_BACKGROUND = "\x1b[22m\x1b[23m\x1b[24m\x1b[39m";
 const ANSI_RE =
 	/\x1b(?:\][^\u0007]*(?:\u0007|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
+const BACKGROUND_ANSI_RE = /\x1b\[(?:48;[25];[0-9;]*|4[0-7]|10[0-7])m/;
 
 declare global {
 	// eslint-disable-next-line no-var
@@ -760,9 +761,13 @@ function isRenderedBlankLine(line: string): boolean {
 	return stripAnsi(line).trim() === "";
 }
 
+function isLeadingSpacerLine(line: string): boolean {
+	return isRenderedBlankLine(line) && !BACKGROUND_ANSI_RE.test(line);
+}
+
 function withoutLeadingBlankLines(lines: string[]): string[] {
 	const firstContentIndex = lines.findIndex(
-		(line) => !isRenderedBlankLine(line),
+		(line) => !isLeadingSpacerLine(line),
 	);
 	if (firstContentIndex <= 0) return lines;
 	return lines.slice(firstContentIndex);
