@@ -328,7 +328,7 @@ function addTimestampToBlock(
 	options: {
 		marker?: string;
 		trimBlankAfterTimestamp?: boolean;
-		trailingRuleMarker?: string;
+		trailingRule?: boolean;
 	} = {},
 ): string[] {
 	if (!timestamp || lines.length === 0) return lines;
@@ -336,13 +336,8 @@ function addTimestampToBlock(
 		let finalized = options.trimBlankAfterTimestamp
 			? removeBlankLinesAfter(next, timestampIndex)
 			: next;
-		if (options.trailingRuleMarker) {
-			finalized = addTrailingRuleLine(
-				finalized,
-				width,
-				theme,
-				options.trailingRuleMarker,
-			);
+		if (options.trailingRule) {
+			finalized = addTrailingRuleLine(finalized, width, theme);
 		}
 		return finalized;
 	};
@@ -635,7 +630,7 @@ async function installPatches(): Promise<void> {
 		return addTimestampToBlock(lines, width, timestamp, theme, {
 			marker: "🤖",
 			trimBlankAfterTimestamp: true,
-			trailingRuleMarker: "🤖",
+			trailingRule: true,
 		});
 	};
 
