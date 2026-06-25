@@ -96,6 +96,8 @@ type InteractiveModeLike = {
 			message: { role?: string },
 			options?: unknown,
 		): void;
+		showNewVersionNotification(newVersion: string): void;
+		showPackageUpdateNotification(packages: string[]): void;
 		chatContainer?: { children?: unknown[] };
 	};
 };
@@ -1271,6 +1273,24 @@ async function installPatches(): Promise<void> {
 			: 0;
 		addMessageToChat.call(this, message, options);
 		removeNewTopLevelSpacers(this.chatContainer, before);
+	};
+
+	const showNewVersionNotification =
+		InteractiveMode.prototype.showNewVersionNotification;
+	InteractiveMode.prototype.showNewVersionNotification = function (
+		newVersion: string,
+	) {
+		if (isBrefEnabled()) return;
+		showNewVersionNotification.call(this, newVersion);
+	};
+
+	const showPackageUpdateNotification =
+		InteractiveMode.prototype.showPackageUpdateNotification;
+	InteractiveMode.prototype.showPackageUpdateNotification = function (
+		packages: string[],
+	) {
+		if (isBrefEnabled()) return;
+		showPackageUpdateNotification.call(this, packages);
 	};
 
 	state.patched = true;
