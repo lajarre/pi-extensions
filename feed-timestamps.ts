@@ -278,7 +278,7 @@ function renderUserTopBorder(
 	return theme.bg(
 		"userMessageBg",
 		renderRuledTimestampLine(width, theme, {
-			rule: "─",
+			rule: "╌",
 			timestamp: rawTimestamp,
 			marker: "💬",
 			ruleColor: "borderAccent",
@@ -292,7 +292,7 @@ function renderUserBottomBorder(
 ): string {
 	return theme.bg(
 		"userMessageBg",
-		theme.fg("borderAccent", "─".repeat(Math.max(0, width))),
+		theme.fg("borderAccent", "╌".repeat(Math.max(0, width))),
 	);
 }
 
