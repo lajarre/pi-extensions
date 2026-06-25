@@ -23,6 +23,25 @@ Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set
 | `spawn-worker.ts` | Tmux worker spawn + session-control orchestration |
 | `todos.ts` | Todo management extension |
 
+## Bref
+
+`bref.ts` adds `/bref` for a compact feed view. It has three modes:
+
+```text
+/bref
+/bref picker
+/bref regular
+/bref detail
+/bref condensed
+/bref cycle
+```
+
+The default shortcut is `Ctrl+Shift+B`; override it with `bref.toggle` in `~/.pi/agent/keybindings.json`. The legacy `extension.bref.toggle` key is still accepted.
+
+Condensed mode keeps selected lanes expanded and collapses the rest to one-line `↳...` rows. Default expanded lanes are `user`, `assistant`, and `custom`. Use `/bref picker` to choose expanded lanes; `Ctrl+S` in the picker saves defaults to `~/.pi/agent/bref.json`.
+
+Condensed mode also removes spacer-only gaps between feed blocks and hides Pi update/package-update notice blocks. Regular and detail modes leave those notices visible.
+
 ## Codex Fast
 
 `codex-fast.ts` adds `/fast` for ChatGPT-authenticated OpenAI Codex models that support Fast mode (`gpt-5.5` and `gpt-5.4`). When enabled, eligible provider requests include `service_tier: "priority"`.
