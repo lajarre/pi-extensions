@@ -182,7 +182,7 @@ function renderRuledTimestampLine(
 		0,
 		width - visibleWidth(markerText) - visibleWidth(timestampText),
 	);
-	const leftFillWidth = markerText ? Math.min(2, fillWidth) : 0;
+	const leftFillWidth = markerText ? Math.min(1, fillWidth) : 0;
 	const rightFillWidth = fillWidth - leftFillWidth;
 	return (
 		theme.fg(options.ruleColor, options.rule.repeat(leftFillWidth)) +
@@ -200,7 +200,7 @@ function renderDashedTimestampLine(
 	width: number,
 	timestamp: string,
 	theme: ThemeModule["theme"],
-	dash = "┄",
+	dash = "╌",
 	marker?: string,
 ): string {
 	return renderRuledTimestampLine(width, theme, {
@@ -309,7 +309,14 @@ function addTimestampToBlock(
 	);
 	if (candidateIndexes.length === 0) return lines;
 
-	const backgroundBlankIndex = candidateIndexes.find((index) => {
+	const leadingChromeIndexes: number[] = [];
+	for (const index of candidateIndexes) {
+		const line = lines[index] ?? "";
+		if (!isBlankLine(line) && !isBorderOnlyLine(line)) break;
+		leadingChromeIndexes.push(index);
+	}
+
+	const backgroundBlankIndex = leadingChromeIndexes.find((index) => {
 		const line = lines[index] ?? "";
 		return isBlankLine(line) && isBackgroundLine(line);
 	});
@@ -329,13 +336,13 @@ function addTimestampToBlock(
 		}
 	}
 
-	const borderIndex = candidateIndexes.find((index) =>
+	const borderIndex = leadingChromeIndexes.find((index) =>
 		isBorderOnlyLine(lines[index] ?? ""),
 	);
 	if (borderIndex !== undefined) {
 		const line = lines[borderIndex] ?? "";
 		const { prefix, content } = splitZoneStart(line);
-		const dash = stripAnsi(content).trim().at(0) ?? "┄";
+		const dash = stripAnsi(content).trim().at(0) ?? "╌";
 		const next = [...lines];
 		next[borderIndex] = `${prefix}${renderDashedTimestampLine(
 			width,
@@ -347,7 +354,7 @@ function addTimestampToBlock(
 		return next;
 	}
 
-	const blankIndex = candidateIndexes.find((index) =>
+	const blankIndex = leadingChromeIndexes.find((index) =>
 		isBlankLine(lines[index] ?? ""),
 	);
 	if (blankIndex !== undefined) {
@@ -358,7 +365,7 @@ function addTimestampToBlock(
 			width,
 			timestamp,
 			theme,
-			"┄",
+			"╌",
 			options.marker,
 		)}`;
 		return next;
@@ -371,7 +378,7 @@ function addTimestampToBlock(
 		width,
 		timestamp,
 		theme,
-		"┄",
+		"╌",
 		options.marker,
 	)}`;
 	const next = [...lines];
