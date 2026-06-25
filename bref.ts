@@ -11,6 +11,7 @@ import {
 	Key,
 	Markdown,
 	matchesKey,
+	Spacer,
 	truncateToWidth,
 	visibleWidth,
 } from "@mariozechner/pi-tui";
@@ -89,6 +90,16 @@ type RenderableComponentClass = {
 	prototype: { render(width: number): string[] };
 };
 
+type InteractiveModeLike = {
+	prototype: {
+		addMessageToChat(
+			message: { role?: string },
+			options?: unknown,
+		): void;
+		chatContainer?: { children?: unknown[] };
+	};
+};
+
 const LANE_DEFINITIONS: Array<{ lane: BrefLane; label: string }> = [
 	{ lane: "user", label: "user prompts" },
 	{ lane: "assistant", label: "assistant replies" },
@@ -142,6 +153,8 @@ const SESSION_TOOL_NAMES = new Set([
 
 const FULL_RESET_RE = /\x1b\[0m/g;
 const RESET_PRESERVING_BACKGROUND = "\x1b[22m\x1b[23m\x1b[24m\x1b[39m";
+const ANSI_RE =
+	/\x1b(?:\][^\u0007]*(?:\u0007|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
 
 declare global {
 	// eslint-disable-next-line no-var
@@ -739,6 +752,42 @@ function renderLaneBullet(
 	);
 }
 
+function stripAnsi(value: string): string {
+	return value.replace(ANSI_RE, "");
+}
+
+function isRenderedBlankLine(line: string): boolean {
+	return stripAnsi(line).trim() === "";
+}
+
+function withoutLeadingBlankLines(lines: string[]): string[] {
+	const firstContentIndex = lines.findIndex(
+		(line) => !isRenderedBlankLine(line),
+	);
+	if (firstContentIndex <= 0) return lines;
+	return lines.slice(firstContentIndex);
+}
+
+function renderBrefTight(lines: string[]): string[] {
+	return isBrefEnabled() ? withoutLeadingBlankLines(lines) : lines;
+}
+
+function removeNewTopLevelSpacers(
+	container: { children?: unknown[] } | undefined,
+	startIndex: number,
+): void {
+	if (!isBrefEnabled()) return;
+	const children = container?.children;
+	if (!Array.isArray(children)) return;
+	for (let index = startIndex; index < children.length; ) {
+		if (children[index] instanceof Spacer) {
+			children.splice(index, 1);
+			continue;
+		}
+		index++;
+	}
+}
+
 class BrefPicker {
 	private selectedIndex = 0;
 	private expandedLanes: Set<BrefLane>;
@@ -930,6 +979,7 @@ async function installPatches(): Promise<void> {
 		skillModule,
 		branchModule,
 		compactionModule,
+		interactiveModeModule,
 		themeModule,
 	] = await Promise.all([
 		importInternal<{ UserMessageComponent: RenderableComponentClass }>(
@@ -956,6 +1006,9 @@ async function installPatches(): Promise<void> {
 		importInternal<{
 			CompactionSummaryMessageComponent: RenderableComponentClass;
 		}>("modes/interactive/components/compaction-summary-message.js"),
+		importInternal<{
+			InteractiveMode: InteractiveModeLike;
+		}>("modes/interactive/interactive-mode.js"),
 		importInternal<ThemeModule>("modes/interactive/theme/theme.js"),
 	]);
 
@@ -967,6 +1020,7 @@ async function installPatches(): Promise<void> {
 	const { SkillInvocationMessageComponent } = skillModule;
 	const { BranchSummaryMessageComponent } = branchModule;
 	const { CompactionSummaryMessageComponent } = compactionModule;
+	const { InteractiveMode } = interactiveModeModule;
 	const { theme } = themeModule;
 
 	const userRender = UserMessageComponent.prototype.render;
@@ -974,7 +1028,7 @@ async function installPatches(): Promise<void> {
 		if (isBrefEnabled() && !isExpandedLane("user")) {
 			return renderLaneBullet(theme, width, "user", "user prompt");
 		}
-		return userRender.call(this, width);
+		return renderBrefTight(userRender.call(this, width));
 	};
 
 	const assistantRender = AssistantMessageComponent.prototype.render;
@@ -984,7 +1038,7 @@ async function installPatches(): Promise<void> {
 		const expandAssistant = isExpandedLane("assistant");
 		const expandThinking = isExpandedLane("thinking");
 		if (!isBrefEnabled() || (expandAssistant && expandThinking)) {
-			return assistantRender.call(this, width);
+			return renderBrefTight(assistantRender.call(this, width));
 		}
 
 		const message = this.lastMessage;
@@ -1095,7 +1149,7 @@ async function installPatches(): Promise<void> {
 			typeof this.toolName === "string" ? this.toolName : "tool";
 		const lane = laneForTool(toolName);
 		if (!isBrefEnabled() || isExpandedLane(lane)) {
-			return toolRender.call(this, width);
+			return renderBrefTight(toolRender.call(this, width));
 		}
 
 		const label = summarizeToolCall(
@@ -1115,7 +1169,7 @@ async function installPatches(): Promise<void> {
 	const bashRender = BashExecutionComponent.prototype.render;
 	BashExecutionComponent.prototype.render = function (width: number) {
 		if (!isBrefEnabled() || isExpandedLane("bash")) {
-			return bashRender.call(this, width);
+			return renderBrefTight(bashRender.call(this, width));
 		}
 
 		let detail: string | undefined;
@@ -1147,7 +1201,7 @@ async function installPatches(): Promise<void> {
 	const customRender = CustomMessageComponent.prototype.render;
 	CustomMessageComponent.prototype.render = function (width: number) {
 		if (!isBrefEnabled() || isExpandedLane("custom")) {
-			return customRender.call(this, width);
+			return renderBrefTight(customRender.call(this, width));
 		}
 
 		const message = this.message;
@@ -1163,7 +1217,7 @@ async function installPatches(): Promise<void> {
 		width: number,
 	) {
 		if (!isBrefEnabled() || isExpandedLane("skill")) {
-			return skillRender.call(this, width);
+			return renderBrefTight(skillRender.call(this, width));
 		}
 		return renderLaneBullet(
 			theme,
@@ -1178,7 +1232,7 @@ async function installPatches(): Promise<void> {
 		width: number,
 	) {
 		if (!isBrefEnabled() || isExpandedLane("branch")) {
-			return branchRender.call(this, width);
+			return renderBrefTight(branchRender.call(this, width));
 		}
 		return renderLaneBullet(theme, width, "branch", "branch summary");
 	};
@@ -1189,7 +1243,7 @@ async function installPatches(): Promise<void> {
 		width: number,
 	) {
 		if (!isBrefEnabled() || isExpandedLane("compaction")) {
-			return compactionRender.call(this, width);
+			return renderBrefTight(compactionRender.call(this, width));
 		}
 		const tokenStr = Number(
 			this.message?.tokensBefore ?? 0,
@@ -1200,6 +1254,18 @@ async function installPatches(): Promise<void> {
 			"compaction",
 			`compacted from ${tokenStr} tokens`,
 		);
+	};
+
+	const addMessageToChat = InteractiveMode.prototype.addMessageToChat;
+	InteractiveMode.prototype.addMessageToChat = function (
+		message: { role?: string },
+		options?: unknown,
+	) {
+		const before = Array.isArray(this.chatContainer?.children)
+			? this.chatContainer.children.length
+			: 0;
+		addMessageToChat.call(this, message, options);
+		removeNewTopLevelSpacers(this.chatContainer, before);
 	};
 
 	state.patched = true;
