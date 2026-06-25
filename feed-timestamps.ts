@@ -143,18 +143,6 @@ function splitZoneStart(line: string): {
 		: { prefix: "", content: line };
 }
 
-function splitZoneEndFinal(line: string): {
-	prefix: string;
-	content: string;
-} {
-	return line.startsWith(OSC133_ZONE_END_FINAL)
-		? {
-				prefix: OSC133_ZONE_END_FINAL,
-				content: line.slice(OSC133_ZONE_END_FINAL.length),
-			}
-		: { prefix: "", content: line };
-}
-
 function isBlankLine(line: string): boolean {
 	return stripAnsi(line).trim() === "";
 }
@@ -223,19 +211,6 @@ function renderDashedTimestampLine(
 	});
 }
 
-function renderDashedRuleLine(
-	width: number,
-	theme: ThemeModule["theme"],
-	dash = "╌",
-	marker?: string,
-): string {
-	return renderRuledTimestampLine(width, theme, {
-		rule: dash,
-		marker,
-		ruleColor: "borderMuted",
-	});
-}
-
 function renderTimestampInBackgroundLine(
 	line: string,
 	width: number,
@@ -286,16 +261,6 @@ function renderUserTopBorder(
 	);
 }
 
-function renderUserBottomBorder(
-	width: number,
-	theme: ThemeModule["theme"],
-): string {
-	return theme.bg(
-		"userMessageBg",
-		theme.fg("borderAccent", "╌".repeat(Math.max(0, width))),
-	);
-}
-
 function replaceUserMessageBorders(
 	lines: string[],
 	width: number,
@@ -307,16 +272,9 @@ function replaceUserMessageBorders(
 	const startPrefix = lines[0]?.startsWith(OSC133_ZONE_START)
 		? OSC133_ZONE_START
 		: "";
-	const endPrefix = lines[lines.length - 1]?.startsWith(
-		OSC133_ZONE_END_FINAL,
-	)
-		? OSC133_ZONE_END_FINAL
-		: "";
 
 	const next = [...lines];
 	next[0] = `${startPrefix}${renderUserTopBorder(width, timestamp, theme)}`;
-	next[next.length - 1] =
-		`${endPrefix}${renderUserBottomBorder(width, theme)}`;
 	return next;
 }
 
@@ -328,19 +286,13 @@ function addTimestampToBlock(
 	options: {
 		marker?: string;
 		trimBlankAfterTimestamp?: boolean;
-		trailingRule?: boolean;
 	} = {},
 ): string[] {
 	if (!timestamp || lines.length === 0) return lines;
-	const finalize = (next: string[], timestampIndex: number) => {
-		let finalized = options.trimBlankAfterTimestamp
+	const finalize = (next: string[], timestampIndex: number) =>
+		options.trimBlankAfterTimestamp
 			? removeBlankLinesAfter(next, timestampIndex)
 			: next;
-		if (options.trailingRule) {
-			finalized = addTrailingRuleLine(finalized, width, theme);
-		}
-		return finalized;
-	};
 
 	const candidateIndexes = lines.flatMap((line, index) =>
 		isBrefSyntheticLine(line) ? [] : [index],
@@ -437,30 +389,6 @@ function removeBlankLinesAfter(
 	) {
 		next.splice(index, 1);
 	}
-	return next;
-}
-
-function addTrailingRuleLine(
-	lines: string[],
-	width: number,
-	theme: ThemeModule["theme"],
-	marker?: string,
-): string[] {
-	const next = [...lines];
-	let endPrefix = "";
-	while (next.length > 0) {
-		const lastIndex = next.length - 1;
-		const line = next[lastIndex] ?? "";
-		const { prefix, content } = splitZoneEndFinal(line);
-		if (prefix) endPrefix = prefix;
-		next[lastIndex] = content;
-		if (!isBlankLine(content)) break;
-		next.pop();
-	}
-
-	next.push(
-		`${endPrefix}${renderDashedRuleLine(width, theme, "╌", marker)}`,
-	);
 	return next;
 }
 
@@ -630,7 +558,6 @@ async function installPatches(): Promise<void> {
 		return addTimestampToBlock(lines, width, timestamp, theme, {
 			marker: "🤖",
 			trimBlankAfterTimestamp: true,
-			trailingRule: true,
 		});
 	};
 
