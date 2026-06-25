@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { visibleWidth } from "@mariozechner/pi-tui";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -17,6 +18,15 @@ type ThemeModule = {
 		fg(color: string, text: string): string;
 		bg(color: string, text: string): string;
 	};
+};
+
+type RuledTimestampLineOptions = {
+	rule: string;
+	timestamp?: string;
+	marker?: string;
+	ruleColor: string;
+	markerColor?: string;
+	timestampColor?: string;
 };
 
 type UserMessageComponentLike = {
@@ -145,22 +155,60 @@ function isBorderOnlyLine(line: string): boolean {
 	return /^[─━-]+$/.test(stripAnsi(line).trim());
 }
 
+function renderRuledTimestampLine(
+	width: number,
+	theme: ThemeModule["theme"],
+	options: RuledTimestampLineOptions,
+): string {
+	if (width <= 0) return "";
+	const timestamp = options.timestamp ?? "";
+	const timestampText = timestamp ? ` ${timestamp}` : "";
+	if (visibleWidth(timestampText) >= width) {
+		return theme.fg(
+			options.timestampColor ?? "dim",
+			timestampText.slice(-width),
+		);
+	}
+
+	let markerText = options.marker ? ` ${options.marker} ` : "";
+	if (
+		markerText &&
+		visibleWidth(markerText) + visibleWidth(timestampText) >= width
+	) {
+		markerText = "";
+	}
+
+	const fillWidth = Math.max(
+		0,
+		width - visibleWidth(markerText) - visibleWidth(timestampText),
+	);
+	const leftFillWidth = markerText ? Math.min(2, fillWidth) : 0;
+	const rightFillWidth = fillWidth - leftFillWidth;
+	return (
+		theme.fg(options.ruleColor, options.rule.repeat(leftFillWidth)) +
+		(markerText
+			? theme.fg(options.markerColor ?? "accent", markerText)
+			: "") +
+		theme.fg(options.ruleColor, options.rule.repeat(rightFillWidth)) +
+		(timestampText
+			? theme.fg(options.timestampColor ?? "dim", timestampText)
+			: "")
+	);
+}
+
 function renderDashedTimestampLine(
 	width: number,
 	timestamp: string,
 	theme: ThemeModule["theme"],
 	dash = "┄",
+	marker?: string,
 ): string {
-	if (width <= 0) return "";
-	const text =
-		timestamp.length >= width
-			? timestamp.slice(-width)
-			: ` ${timestamp}`;
-	if (text.length >= width) return theme.fg("dim", text.slice(-width));
-	return (
-		theme.fg("borderMuted", dash.repeat(width - text.length)) +
-		theme.fg("dim", text)
-	);
+	return renderRuledTimestampLine(width, theme, {
+		rule: dash,
+		timestamp,
+		marker,
+		ruleColor: "borderMuted",
+	});
 }
 
 function renderTimestampInBackgroundLine(
@@ -204,8 +252,12 @@ function renderUserTopBorder(
 
 	return theme.bg(
 		"userMessageBg",
-		theme.fg("borderAccent", "─".repeat(width - timestampText.length)) +
-			(rawTimestamp ? theme.fg("dim", timestampText) : ""),
+		renderRuledTimestampLine(width, theme, {
+			rule: "─",
+			timestamp: rawTimestamp,
+			marker: "💬",
+			ruleColor: "borderAccent",
+		}),
 	);
 }
 
@@ -248,6 +300,7 @@ function addTimestampToBlock(
 	width: number,
 	timestamp: string | undefined,
 	theme: ThemeModule["theme"],
+	options: { marker?: string } = {},
 ): string[] {
 	if (!timestamp || lines.length === 0) return lines;
 
@@ -289,6 +342,7 @@ function addTimestampToBlock(
 			timestamp,
 			theme,
 			dash,
+			options.marker,
 		)}`;
 		return next;
 	}
@@ -304,6 +358,8 @@ function addTimestampToBlock(
 			width,
 			timestamp,
 			theme,
+			"┄",
+			options.marker,
 		)}`;
 		return next;
 	}
@@ -315,6 +371,8 @@ function addTimestampToBlock(
 		width,
 		timestamp,
 		theme,
+		"┄",
+		options.marker,
 	)}`;
 	const next = [...lines];
 	next.splice(targetIndex, 0, timestampLine);
@@ -484,7 +542,9 @@ async function installPatches(): Promise<void> {
 	) {
 		const lines = assistantRender.call(this, width);
 		const timestamp = formatTimestamp(this.lastMessage?.timestamp);
-		return addTimestampToBlock(lines, width, timestamp, theme);
+		return addTimestampToBlock(lines, width, timestamp, theme, {
+			marker: "🤖",
+		});
 	};
 
 	patchTimestampRender(
