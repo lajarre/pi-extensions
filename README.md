@@ -2,6 +2,8 @@
 
 Personal [pi](https://github.com/badlogic/pi) extensions bundle — coherent set of extensions used in my daily workflow.
 
+Feature specs, plans, and review artifacts live in the private [pi-extensions.spec](https://github.com/lajarre/pi-extensions.spec) companion repository.
+
 ## Extensions
 
 | Name | Description |
