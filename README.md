@@ -12,8 +12,6 @@ There is no single bundle entry point. Each file or directory is an independent 
 | [`blaz/`](blaz/) | automatic | Replace the footer with cwd, branch, model, token, context, and cost data; show the session name above the editor. |
 | [`bref.ts`](bref.ts) | `/bref`, `Ctrl+Shift+B` | Switch between regular, detail, and condensed feed rendering. |
 | [`codex-fast.ts`](codex-fast.ts) | `/fast` | Toggle OpenAI Codex priority processing for supported ChatGPT-authenticated models. |
-| [`compaction-model.ts`](compaction-model.ts) | automatic | Route compaction through Claude Opus 4.6 with xhigh thinking, with fallback to Pi's default compaction. |
-| [`condense.ts`](condense.ts) | `/condense` | Rewrite a dictated or rambling prompt with the cheapest available model and place the result in the editor for review. |
 | [`copy-session-id.ts`](copy-session-id.ts) | `/sid`, `/session-id`, `F8` | Copy the current session ID and show temporary feedback. |
 | [`feed-timestamps.ts`](feed-timestamps.ts) | automatic | Add right-aligned timestamps and visual rules to feed rows. |
 | [`fork-rename.ts`](fork-rename.ts) | automatic | Rename forked sessions with incrementing `-forkN` suffixes. |
@@ -36,7 +34,7 @@ Some extensions have external requirements:
 - `anycopy-shortcut.ts` requires `pi-anycopy`.
 - `github-write-approval/` requires the GitHub CLI.
 - `spawn-worker.ts` requires tmux and Pi session control.
-- `nym/`, `condense.ts`, `session-recap.ts`, `compaction-model.ts`, and `wiggum/` require suitable model credentials.
+- `nym/`, `session-recap.ts`, and `wiggum/` require suitable model credentials.
 - `protect-paths.ts` uses macOS-specific Finder integration for Trash behavior.
 
 Extensions execute with the user's permissions. Safety extensions are guardrails, not a sandbox.
