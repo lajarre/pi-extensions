@@ -102,4 +102,4 @@ Focused tests also live beside `blaz/`, `nym/`, and `wiggum/`; run the owning te
 
 ## specs
 
-Feature specs, plans, review reports, and loop artifacts live in the private [pi-extensions.spec](https://github.com/lajarre/pi-extensions.spec) companion repository under `feature/`.
+Feature specs, plans, review reports, and loop artifacts live in the local sibling `pi-extensions.spec` companion repository under `feature/`.
