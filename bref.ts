@@ -72,7 +72,6 @@ type ThemeColor =
 	| "syntaxString"
 	| "syntaxType"
 	| "syntaxVariable"
-	| "thinkingText"
 	| "warning";
 
 type ThemeBackgroundColor = "toolPendingBg";
@@ -1083,7 +1082,7 @@ async function installPatches(): Promise<void> {
 		const showThinking =
 			(this as { hideThinkingBlock?: boolean }).hideThinkingBlock !==
 			true;
-		if (!isBrefEnabled() || (expandAssistant && showThinking)) {
+		if (!isBrefEnabled()) {
 			return renderBrefTight(assistantRender.call(this, width));
 		}
 
@@ -1131,20 +1130,13 @@ async function installPatches(): Promise<void> {
 			}
 
 			if (content?.type === "thinking") {
-				if (!showThinking) continue;
-				const thinking =
-					typeof content.thinking === "string"
-						? content.thinking.trim()
-						: "";
-				if (!thinking) continue;
-				container.clear();
-				container.addChild(
-					new Markdown(thinking, 1, 0, markdownTheme, {
-						color: (text: string) => theme.fg("thinkingText", text),
-						italic: true,
-					}),
+				const hasThinking =
+					typeof content.thinking === "string" &&
+					content.thinking.trim().length > 0;
+				if (!showThinking || !hasThinking) continue;
+				lines.push(
+					...renderBullet(theme, width, "thinking", undefined, "dim"),
 				);
-				lines.push(...container.render(width));
 			}
 		}
 
