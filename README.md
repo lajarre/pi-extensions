@@ -56,6 +56,8 @@ The default shortcut is `Ctrl+Shift+B`. Override it with `bref.toggle` in `~/.pi
 
 Condensed mode keeps selected lanes expanded and collapses the rest to one-line `↳...` rows. Default expanded lanes are `user`, `assistant`, and `custom`. `/bref picker` changes the active lanes; `Ctrl+S` saves defaults to `~/.pi/agent/bref.json`.
 
+Thinking follows Pi's `Ctrl+T` display toggle rather than appearing in the picker. Visible thinking renders in full; hidden thinking renders no placeholder or condensed row.
+
 Condensed mode also removes spacer-only gaps and hides Pi update/package-update notice blocks. Regular and detail modes retain normal notice rendering.
 
 `bref.ts` and `feed-timestamps.ts` currently patch Pi's private feed components. Re-test both after Pi upgrades that change interactive rendering internals.

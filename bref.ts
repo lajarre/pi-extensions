@@ -20,7 +20,6 @@ type BrefMode = "regular" | "detail" | "condensed";
 type BrefLane =
 	| "user"
 	| "assistant"
-	| "thinking"
 	| "subagent"
 	| "todo"
 	| "tool"
@@ -110,7 +109,6 @@ type HideableRenderable = {
 const LANE_DEFINITIONS: Array<{ lane: BrefLane; label: string }> = [
 	{ lane: "user", label: "user prompts" },
 	{ lane: "assistant", label: "assistant replies" },
-	{ lane: "thinking", label: "thinking" },
 	{ lane: "subagent", label: "subagents" },
 	{ lane: "todo", label: "todos" },
 	{ lane: "tool", label: "tool calls" },
@@ -135,7 +133,6 @@ const DEFAULT_EXPANDED_LANES: BrefLane[] = [
 const CONDENSED_ROW_COLORS: Record<BrefLane, ThemeColor> = {
 	user: "accent",
 	assistant: "mdHeading",
-	thinking: "dim",
 	subagent: "customMessageLabel",
 	todo: "syntaxNumber",
 	tool: "syntaxType",
@@ -1082,8 +1079,11 @@ async function installPatches(): Promise<void> {
 		width: number,
 	) {
 		const expandAssistant = isExpandedLane("assistant");
-		const expandThinking = isExpandedLane("thinking");
-		if (!isBrefEnabled() || (expandAssistant && expandThinking)) {
+		// Pi updates this component field when Ctrl+T changes visibility.
+		const showThinking =
+			(this as { hideThinkingBlock?: boolean }).hideThinkingBlock !==
+			true;
+		if (!isBrefEnabled() || (expandAssistant && showThinking)) {
 			return renderBrefTight(assistantRender.call(this, width));
 		}
 
@@ -1131,25 +1131,20 @@ async function installPatches(): Promise<void> {
 			}
 
 			if (content?.type === "thinking") {
+				if (!showThinking) continue;
 				const thinking =
 					typeof content.thinking === "string"
 						? content.thinking.trim()
 						: "";
-				if (expandThinking) {
-					if (!thinking) continue;
-					container.clear();
-					container.addChild(
-						new Markdown(thinking, 1, 0, markdownTheme, {
-							color: (text: string) => theme.fg("thinkingText", text),
-							italic: true,
-						}),
-					);
-					lines.push(...container.render(width));
-				} else {
-					lines.push(
-						...renderLaneBullet(theme, width, "thinking", "thinking"),
-					);
-				}
+				if (!thinking) continue;
+				container.clear();
+				container.addChild(
+					new Markdown(thinking, 1, 0, markdownTheme, {
+						color: (text: string) => theme.fg("thinkingText", text),
+						italic: true,
+					}),
+				);
+				lines.push(...container.render(width));
 			}
 		}
 
