@@ -40,9 +40,6 @@
  *   --recap-during-active         Allow focus recaps while an agent turn is still running
  *   --recap-disable               Disable the automatic recap entirely
  *   --recap-model <p/id>          Override the default (active) model
- *
- * Command:
- *   /recap                        Force-generate a recap right now
  */
 
 import { completeSimple, getModel } from "@earendil-works/pi-ai";
@@ -70,7 +67,7 @@ type Entry = {
 
 type Model = Parameters<typeof completeSimple>[0];
 
-type RecapReason = "idle" | "manual" | "resume" | "focus";
+type RecapReason = "idle" | "resume" | "focus";
 
 const WIDGET_KEY = "session-recap";
 const STATUS_KEY = "session-recap";
@@ -413,8 +410,7 @@ export default function (pi: ExtensionAPI) {
 		opts: { reason: RecapReason },
 	) => {
 		const entries = ctx.sessionManager.getBranch() as Entry[];
-		if (!hasMeaningfulActivity(entries) && opts.reason !== "manual")
-			return;
+		if (!hasMeaningfulActivity(entries)) return;
 
 		const transcript = buildRecentTranscript(
 			entries,
@@ -667,13 +663,5 @@ export default function (pi: ExtensionAPI) {
 				void generateAndShow(ctx, { reason: "resume" });
 			}, 300);
 		}
-	});
-
-	// Manual command.
-	pi.registerCommand("recap", {
-		description: "Generate a one-line recap of recent session activity",
-		handler: async (_args, ctx) => {
-			await generateAndShow(ctx, { reason: "manual" });
-		},
 	});
 }
