@@ -26,23 +26,24 @@
  *   /move-session <targetCwd>
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
 import {
 	closeSync,
 	lstatSync,
 	openSync,
-	readSync,
 	readdirSync,
 	readlinkSync,
+	readSync,
 	renameSync,
+	type Stats,
 	statSync,
 	unlinkSync,
 	writeSync,
 } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 
 const TRASH_TIMEOUT_MS = 5000;
 const HEADER_READ_MAX = 8192;
@@ -75,7 +76,10 @@ function clearParentSession(sessionFile: string): void {
 
 	delete header.parentSession;
 	const newHeaderLine = JSON.stringify(header) + "\n";
-	const originalHeaderBytes = Buffer.byteLength(headerChunk.slice(0, newlineIndex + 1), "utf-8");
+	const originalHeaderBytes = Buffer.byteLength(
+		headerChunk.slice(0, newlineIndex + 1),
+		"utf-8",
+	);
 
 	const temporaryPath = sessionFile + ".move-session-tmp";
 	let writeFd: number | undefined;
@@ -87,7 +91,13 @@ function clearParentSession(sessionFile: string): void {
 		const copyBuffer = Buffer.alloc(COPY_CHUNK_SIZE);
 		let position = originalHeaderBytes;
 		while (true) {
-			const readCount = readSync(fd, copyBuffer, 0, COPY_CHUNK_SIZE, position);
+			const readCount = readSync(
+				fd,
+				copyBuffer,
+				0,
+				COPY_CHUNK_SIZE,
+				position,
+			);
 			if (readCount === 0) break;
 			writeSync(writeFd, copyBuffer, 0, readCount);
 			position += readCount;
@@ -125,7 +135,12 @@ function getSocketPath(sessionId: string): string {
 }
 
 function isSafeAlias(alias: string): boolean {
-	return !alias.includes("/") && !alias.includes("\\") && !alias.includes("..") && alias.length > 0;
+	return (
+		!alias.includes("/") &&
+		!alias.includes("\\") &&
+		!alias.includes("..") &&
+		alias.length > 0
+	);
 }
 
 function getAliasPath(alias: string): string {
@@ -136,7 +151,10 @@ function getAliasPath(alias: string): string {
  * Best-effort cleanup of the old session-control state so the inert parent
  * cannot continue owning the alias/socket path after handoff.
  */
-function cleanupOldSessionControl(sessionId: string, sessionName?: string): void {
+function cleanupOldSessionControl(
+	sessionId: string,
+	sessionName?: string,
+): void {
 	const socketPath = getSocketPath(sessionId);
 
 	try {
@@ -187,7 +205,9 @@ function getChildArgs(destSessionFile: string): string[] {
 export default function (pi: ExtensionAPI) {
 	const trashFileBestEffort = async (filePath: string) => {
 		try {
-			const { code } = await pi.exec("trash", [filePath], { timeout: TRASH_TIMEOUT_MS });
+			const { code } = await pi.exec("trash", [filePath], {
+				timeout: TRASH_TIMEOUT_MS,
+			});
 			if (code === 0) {
 				return;
 			}
@@ -200,7 +220,8 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("move-session", {
-		description: "Move session to another directory and relaunch pi there",
+		description:
+			"Move session to another directory and relaunch pi there",
 		handler: async (args, ctx) => {
 			await ctx.waitForIdle();
 
@@ -221,7 +242,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			targetCwd = resolve(targetCwd);
 
-			let targetCwdStat;
+			let targetCwdStat: Stats;
 			try {
 				targetCwdStat = statSync(targetCwd);
 			} catch (error: any) {
@@ -241,7 +262,10 @@ export default function (pi: ExtensionAPI) {
 
 			const sourceSessionFile = ctx.sessionManager.getSessionFile();
 			if (!sourceSessionFile) {
-				ctx.ui.notify("No persistent session file (maybe started with --no-session)", "error");
+				ctx.ui.notify(
+					"No persistent session file (maybe started with --no-session)",
+					"error",
+				);
 				return;
 			}
 
@@ -249,11 +273,17 @@ export default function (pi: ExtensionAPI) {
 			const sourceSessionName = ctx.sessionManager.getSessionName();
 
 			try {
-				const forked = SessionManager.forkFrom(sourceSessionFile, targetCwd);
+				const forked = SessionManager.forkFrom(
+					sourceSessionFile,
+					targetCwd,
+				);
 				const destSessionFile = forked.getSessionFile();
 
 				if (!destSessionFile) {
-					ctx.ui.notify("Internal error: forkFrom() produced no session file", "error");
+					ctx.ui.notify(
+						"Internal error: forkFrom() produced no session file",
+						"error",
+					);
 					return;
 				}
 
@@ -292,7 +322,10 @@ export default function (pi: ExtensionAPI) {
 							// ignore best-effort cleanup errors
 						}
 						try {
-							cleanupOldSessionControl(sourceSessionId, sourceSessionName);
+							cleanupOldSessionControl(
+								sourceSessionId,
+								sourceSessionName,
+							);
 						} catch {
 							// ignore best-effort cleanup errors
 						}
@@ -315,7 +348,10 @@ export default function (pi: ExtensionAPI) {
 					process.exit(1);
 				});
 			} catch (error: any) {
-				ctx.ui.notify(`Failed to move session: ${error?.message ?? String(error)}`, "error");
+				ctx.ui.notify(
+					`Failed to move session: ${error?.message ?? String(error)}`,
+					"error",
+				);
 			}
 		},
 	});
