@@ -7,7 +7,18 @@ const STATUS_KEY = "fast";
 const FAST_PROVIDER_PREFIX = "openai-codex";
 const FAST_API_ID = "openai-codex-responses";
 const FAST_SERVICE_TIER = "priority";
-const FAST_MODELS = new Set(["gpt-5.4", "gpt-5.5"]);
+// Verified 2026-10-27 against OpenAI's Codex Speed docs and API Fast
+// mode guide. Keep exact IDs: Pi exposes no additional_speed_tiers metadata.
+const FAST_MODELS = new Set([
+	"gpt-5.4",
+	"gpt-5.5",
+	"gpt-5.6-sol",
+	"gpt-6-astra",
+	"gpt-6-sol",
+	"gpt-6-luna",
+	"gpt-6.1-sol",
+	"gpt-6.1-terra",
+]);
 
 type FastOverride = "auto" | "on" | "off";
 type FastEligibility = { ok: true } | { ok: false; reason: string };
@@ -255,7 +266,7 @@ export function getFastEligibility(ctx: FastContext): FastEligibility {
 	if (!FAST_MODELS.has(String(model.id))) {
 		return {
 			ok: false,
-			reason: "model does not support Codex Fast mode",
+			reason: "model is not in the verified Codex Fast allowlist",
 		};
 	}
 

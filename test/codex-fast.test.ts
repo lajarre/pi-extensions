@@ -46,6 +46,17 @@ const eligibleModel: TestModel = {
 	provider: "openai-codex",
 };
 
+const verifiedFastModelIds = [
+	"gpt-5.4",
+	"gpt-5.5",
+	"gpt-5.6-sol",
+	"gpt-6-astra",
+	"gpt-6-sol",
+	"gpt-6-luna",
+	"gpt-6.1-sol",
+	"gpt-6.1-terra",
+];
+
 function createCodexPayload(
 	overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
@@ -282,44 +293,48 @@ describe("loadAutoFastEnabled", () => {
 });
 
 describe("fast eligibility", () => {
-	it("requires openai-codex gpt-5.4/gpt-5.5 with OAuth", () => {
-		assert.deepEqual(
-			getFastEligibility({
-				model: eligibleModel,
-				modelRegistry: {
-					oauth: true,
-					isUsingOAuth() {
-						return this.oauth;
+	it("accepts every model in the exact verified allowlist", () => {
+		for (const id of verifiedFastModelIds) {
+			assert.deepEqual(
+				getFastEligibility({
+					model: { ...eligibleModel, id },
+					modelRegistry: {
+						oauth: true,
+						isUsingOAuth() {
+							return this.oauth;
+						},
 					},
-				},
-			}),
-			{ ok: true },
-		);
+				}),
+				{ ok: true },
+				id,
+			);
+		}
+	});
 
-		assert.equal(
-			getFastEligibility({
-				model: { ...eligibleModel, id: "gpt-5.4" },
-				modelRegistry: {
-					oauth: true,
-					isUsingOAuth() {
-						return this.oauth;
+	it("denies unknown, future, variant, and Spark model IDs", () => {
+		for (const id of [
+			"gpt-6.2",
+			"gpt-7-sol",
+			"gpt-6-astra-preview",
+			"gpt-6.1-sol-spark",
+		]) {
+			assert.deepEqual(
+				getFastEligibility({
+					model: { ...eligibleModel, id },
+					modelRegistry: {
+						isUsingOAuth: () => true,
 					},
+				}),
+				{
+					ok: false,
+					reason: "model is not in the verified Codex Fast allowlist",
 				},
-			}).ok,
-			true,
-		);
-		assert.equal(
-			getFastEligibility({
-				model: { ...eligibleModel, id: "gpt-5.4-mini" },
-				modelRegistry: {
-					oauth: true,
-					isUsingOAuth() {
-						return this.oauth;
-					},
-				},
-			}).ok,
-			false,
-		);
+				id,
+			);
+		}
+	});
+
+	it("requires the exact provider, API, and ChatGPT OAuth", () => {
 		assert.equal(
 			getFastEligibility({
 				model: { ...eligibleModel, provider: "openai-codex-second" },
@@ -501,39 +516,66 @@ describe("applyFastServiceTier", () => {
 });
 
 describe("/fast command", () => {
-	it("enables injection after /fast on", async () => {
+	it("enables Astra injection after /fast on", async () => {
 		setEnv("PI_CODEX_FAST", undefined);
 		useAgentDir();
-		const harness = createHarness();
+		const model = { ...eligibleModel, id: "gpt-6-astra" };
+		const harness = createHarness({ model });
 
 		assert.equal(
-			await harness.callProviderRequest({ model: "gpt-5.5" }),
+			await harness.callProviderRequest({ model: model.id }),
 			undefined,
 		);
 		assert.equal(harness.statuses.get("fast"), undefined);
 
 		await harness.command("fast", "on");
-		assert.deepEqual(
-			await harness.callProviderRequest(createCodexPayload()),
-			{
-				store: false,
-				model: "gpt-5.5",
-				stream: true,
-				instructions: "You are a helpful assistant.",
-				input: [],
-				text: { verbosity: "low" },
-				include: ["reasoning.encrypted_content"],
-				tool_choice: "auto",
-				parallel_tool_calls: true,
-				service_tier: "priority",
-			},
+		const result = await harness.callProviderRequest(
+			createCodexPayload({ model: model.id }),
 		);
+		assert.equal(result?.service_tier, "priority");
 		assert.equal(harness.statuses.get("fast"), "fast");
 	});
 
-	it("blocks manual enablement when the current model is not eligible", async () => {
+	for (const [source, modelId] of [
+		["PI_CODEX_FAST", "gpt-6-sol"],
+		["codexFast.enabled", "gpt-6.1-sol"],
+	] as const) {
+		it(`uses ${source} in auto mode for ${modelId}, while off prevents injection`, async () => {
+			setEnv(
+				"PI_CODEX_FAST",
+				source === "PI_CODEX_FAST" ? "on" : undefined,
+			);
+			const agentDir = useAgentDir();
+			if (source === "codexFast.enabled") {
+				writeFileSync(
+					path.join(agentDir, "settings.json"),
+					JSON.stringify({ codexFast: { enabled: true } }),
+				);
+			}
+			const model = { ...eligibleModel, id: modelId };
+			const harness = createHarness({ model });
+			const payload = createCodexPayload({ model: modelId });
+
+			assert.equal(
+				(await harness.callProviderRequest(payload))?.service_tier,
+				"priority",
+			);
+			await harness.command("fast", "off");
+			assert.equal(
+				await harness.callProviderRequest(payload),
+				undefined,
+			);
+			await harness.command("fast", "auto");
+			assert.equal(
+				(await harness.callProviderRequest(payload))?.service_tier,
+				"priority",
+			);
+		});
+	}
+
+	it("blocks manual enablement outside the verified allowlist", async () => {
 		const harness = createHarness({
-			model: { ...eligibleModel, id: "gpt-5.4-mini" },
+			model: { ...eligibleModel, id: "gpt-6.1-sol-spark" },
 		});
 
 		await harness.command("fast", "on");
@@ -541,7 +583,7 @@ describe("/fast command", () => {
 		assert.equal(harness.notifications.at(-1)?.level, "error");
 		assert.match(
 			harness.notifications.at(-1)?.message ?? "",
-			/model does not support/,
+			/model is not in the verified Codex Fast allowlist/,
 		);
 	});
 

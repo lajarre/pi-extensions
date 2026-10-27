@@ -74,7 +74,20 @@ Condensed mode also removes spacer-only gaps and hides Pi update/package-update 
 /fast status
 ```
 
-When enabled, eligible OpenAI Codex Responses requests include `service_tier: "priority"`. The extension only applies this to ChatGPT-authenticated `gpt-5.4` and `gpt-5.5` models.
+When enabled, eligible OpenAI Codex Responses requests include `service_tier: "priority"`. The extension only applies this to ChatGPT-authenticated models on its exact verified allowlist:
+
+- `gpt-5.4`
+- `gpt-5.5`
+- `gpt-5.6-sol`
+- `gpt-6-astra`
+- `gpt-6-sol`
+- `gpt-6-luna`
+- `gpt-6.1-sol`
+- `gpt-6.1-terra`
+
+As verified on 2026-10-27, OpenAI's [Codex Speed documentation](https://learn.chatgpt.com/docs/agent-configuration/speed) lists Fast for the current GPT-6 Astra, Sol, Luna, 6.1 Sol, and 6.1 Terra models. Its [API Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode) explicitly documents `gpt-5.6-sol` and says `service_tier: "priority"` and `"fast"` are equivalent. This extension retains `"priority"` for compatibility, along with its existing legacy `gpt-5.4` and `gpt-5.5` entries.
+
+The same Codex Speed documentation describes GPT-5.6 Fast as 1.5x faster and states that Fast consumes ChatGPT subscription allowance at 2.5x the Standard rate and purchased credits at 2x. Check the source before enabling it if usage matters.
 
 Auto mode is off by default. Enable it per process with `PI_CODEX_FAST=1`, globally with `~/.pi/agent/settings.json`, or per project with `.pi/settings.json`:
 
@@ -82,9 +95,11 @@ Auto mode is off by default. Enable it per process with `PI_CODEX_FAST=1`, globa
 { "codexFast": { "enabled": true } }
 ```
 
-Legacy `openai-fast.json` files remain readable when the Pi settings key is absent.
+Legacy `openai-fast.json` files remain readable when the Pi settings key is absent. After changing configuration, run `/reload`, then `/fast status` to confirm the effective mode and current-model eligibility.
 
-Pi's `before_provider_request` hook exposes the serialized request but not its actual model/provider identity. The extension therefore validates the active session model and the provider payload shape, but cannot prove exact identity for every possible concurrent request.
+Unknown or future model IDs, variants, and Spark models remain denied until individually verified and added. This local denial means only that the extension has not verified the exact ID; it does not establish upstream incompatibility. Pi's model metadata does not expose Codex `additional_speed_tiers`, so the extension deliberately does not auto-discover or automatically accept models.
+
+Pi's `before_provider_request` hook exposes the serialized request but not its actual model/provider identity. The extension therefore validates the active session model, exact provider and API, ChatGPT OAuth, and the provider payload shape, but cannot prove exact identity for every possible concurrent request. Existing non-null `service_tier` values are left unchanged.
 
 ## development
 
